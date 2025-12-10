@@ -25,6 +25,9 @@ class DynamixelRobotConfig:
     gripper_config: Tuple[int, int, int]
     """The gripper config of GELLO. This is a tuple of (gripper_joint_id, degrees in open_position, degrees in closed_position)."""
 
+    baudrate: int = 57600
+    """The baudrate for Dynamixel communication. Common values: 57600, 1000000, 115200."""
+
     def __post_init__(self):
         assert len(self.joint_ids) == len(self.joint_offsets)
         assert len(self.joint_ids) == len(self.joint_signs)
@@ -38,6 +41,7 @@ class DynamixelRobotConfig:
             real=True,
             joint_signs=list(self.joint_signs),
             port=port,
+            baudrate=self.baudrate,
             gripper_config=self.gripper_config,
             start_joints=start_joints,
         )
