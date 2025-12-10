@@ -34,7 +34,8 @@ ros2/install/
 ros2/log/
 
 # robot packages
-third_party/i2rt/
+# Note: i2rt is now a submodule (tracked by .gitmodules)
+# third_party/i2rt/
 
 # 3D Model Files
 *.stl
