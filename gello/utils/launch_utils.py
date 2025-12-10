@@ -43,7 +43,7 @@ class SimpleLaunchManager:
             dynamixel_config = robot_cfg.get("config", {})
             ids = dynamixel_config.get("ids", [1])
             port = dynamixel_config.get("port", "/dev/ttyUSB0")
-            baudrate = dynamixel_config.get("baudrate", 57600)
+            baudrate = dynamixel_config.get("baudrate", 1000000)
             max_retries = dynamixel_config.get("max_retries", 3)
             use_fake_fallback = dynamixel_config.get("use_fake_fallback", True)
 
