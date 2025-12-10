@@ -8,10 +8,14 @@ from gello.robots.robot import Robot
 class YAMRobot(Robot):
     """A class representing a simulated YAM robot."""
 
-    def __init__(self, channel="can0"):
+    def __init__(self, channel="can0", gripper_type="crank_4310"):
         from i2rt.robots.get_robot import get_yam_robot
+        from i2rt.robots.utils import GripperType
 
-        self.robot = get_yam_robot(channel=channel)
+        # Convert string to GripperType enum
+        gripper = GripperType.from_string_name(gripper_type)
+        
+        self.robot = get_yam_robot(channel=channel, gripper_type=gripper)
 
         # YAM has 7 joints (6 arm joints + 1 gripper)
         self._joint_names = [
