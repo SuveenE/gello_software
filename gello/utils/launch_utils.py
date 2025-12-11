@@ -158,17 +158,20 @@ class SimpleLaunchManager:
             command_joints = self.agent.act(obs)
             current_joints = obs["joint_positions"]
             delta = command_joints - current_joints
+            print(f"Current joints: {current_joints}, Command joints: {command_joints}, Delta: {delta}")
             max_joint_delta = np.abs(delta).max()
             if max_joint_delta > max_delta:
                 delta = delta / max_joint_delta * max_delta
-            self.env.step(current_joints + delta)
+            # self.env.step(current_joints + delta)
 
         # Main control loop
         print("Starting main control loop...")
         while True:
             obs = self.env.get_obs()
             action = self.agent.act(obs)
-            self.env.step(action)
+            print(f"Obs: {obs}")
+            print(f"Action: {action}")
+            # self.env.step(action)
 
     def launch(self):
         """Main launch method that orchestrates everything."""
