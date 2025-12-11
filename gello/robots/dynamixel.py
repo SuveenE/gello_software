@@ -1,3 +1,4 @@
+import time
 from typing import Dict, Optional, Sequence, Tuple
 
 import numpy as np
@@ -71,7 +72,19 @@ class DynamixelRobot(Robot):
 
         if real:
             self._driver = DynamixelDriver(joint_ids, port=port, baudrate=baudrate)
-            self._driver.set_torque_mode(False)
+            # Retry torque mode setting with delays (motors may need time to respond)
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    time.sleep(0.5)  # Give motors time to stabilize
+                    self._driver.set_torque_mode(False)
+                    break
+                except RuntimeError as e:
+                    if attempt < max_retries - 1:
+                        print(f"Retry setting torque mode (attempt {attempt + 1}/{max_retries}): {e}")
+                        time.sleep(1)
+                    else:
+                        raise
         else:
             self._driver = FakeDynamixelDriver(joint_ids)
         self._torque_on = False
