@@ -284,13 +284,20 @@ class DynamixelDriver(DynamixelDriverProtocol):
                     f"Failed to add parameter for Dynamixel with ID {dxl_id}"
                 )
 
-        # Disable torque for each Dynamixel servo
+        # NOTE: Don't start reading thread yet - it will interfere with torque mode setting
+        # The reading thread will be started after torque mode is successfully set
+        self._reading_thread = None
+        
+        # Try to disable torque, but don't fail initialization if it doesn't work yet
+        # Robot initialization will retry with proper delays
         try:
+            time.sleep(0.2)  # Brief delay for motors to be ready
             self.set_torque_mode(self._torque_enabled)
+            # If successful, start reading thread
+            self._start_reading_thread()
         except Exception as e:
             print(f"port: {self._port}, {e}")
-
-        self._start_reading_thread()
+            print("Reading thread will start after torque mode is set successfully")
 
     def _initialize_fake_driver(self):
         """Initialize as a fake driver."""

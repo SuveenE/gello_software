@@ -78,6 +78,10 @@ class DynamixelRobot(Robot):
                 try:
                     time.sleep(0.5)  # Give motors time to stabilize
                     self._driver.set_torque_mode(False)
+                    # Successfully set torque mode - now start reading thread if not already running
+                    if not hasattr(self._driver, '_reading_thread') or self._driver._reading_thread is None:
+                        print("Starting reading thread after successful torque mode setting...")
+                        self._driver._start_reading_thread()
                     break
                 except RuntimeError as e:
                     if attempt < max_retries - 1:
