@@ -1,6 +1,6 @@
 robot:
   _target_: gello.robots.yam.YAMRobot
-  channel: "can_left"
+  channel: "can_follower_l"
 
 agent:
   _target_: gello.agents.gello_agent.GelloAgent
