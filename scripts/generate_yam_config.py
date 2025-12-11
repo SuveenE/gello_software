@@ -43,7 +43,7 @@ class Args:
     gripper: bool = True
     """Whether or not the gripper is attached."""
 
-    channel: str = "can_left"
+    channel: str = "can_follower_l"
     """CAN channel for YAM robot communication."""
 
     def __post_init__(self):
