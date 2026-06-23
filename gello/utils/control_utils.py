@@ -138,6 +138,9 @@ def run_control_loop(
     save_interface: Optional[SaveInterface] = None,
     print_timing: bool = True,
     use_colors: bool = False,
+    max_joint_delta: Optional[float] = None,
+    max_joint_velocity: Optional[float] = None,
+    control_rate_hz: float = 30.0,
 ) -> None:
     """Run the main control loop.
 
@@ -178,7 +181,26 @@ def run_control_loop(
             else:
                 print(message, end="", flush=True)
 
-        action = agent.act(obs)
+        action = np.array(agent.act(obs), dtype=float)
+        current_joints = np.array(obs["joint_positions"], dtype=float)
+
+        if max_joint_delta is not None or max_joint_velocity is not None:
+            delta = action - current_joints
+            max_d = float(np.abs(delta).max())
+            if max_joint_velocity is not None and max_d > 0:
+                implied_velocity = max_d * control_rate_hz
+                if implied_velocity > max_joint_velocity:
+                    print(
+                        f"\nSAFETY STOP: implied joint velocity "
+                        f"{implied_velocity:.2f} rad/s exceeds limit "
+                        f"{max_joint_velocity:.2f} rad/s. Halting commands."
+                    )
+                    print("Power off the arm if needed, then Ctrl+C to exit.")
+                    time.sleep(0.5)
+                    continue
+            if max_joint_delta is not None and max_d > max_joint_delta:
+                delta = delta / max_d * max_joint_delta
+                action = current_joints + delta
 
         # Handle save interface
         if save_interface is not None:

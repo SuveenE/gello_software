@@ -199,8 +199,53 @@ def move_to_start_position(
     bimanual: bool = False,
     left_cfg: Optional[Dict[str, Any]] = None,
     right_cfg: Optional[Dict[str, Any]] = None,
+    agent=None,
 ):
-    """Move robot to start position if specified."""
+    """Move robot toward start pose before teleop begins.
+
+    With move_to_start_target: gello (recommended for hardware), the follower
+    slowly tracks the leader pose so the control loop does not jerk on startup.
+    """
+    cfg = left_cfg or {}
+    if cfg.get("skip_move_to_start", False):
+        print("Skipping move_to_start (skip_move_to_start=true).")
+        print("Hold GELLO near the YAM pose before starting teleop.")
+        return
+
+    step_rad = cfg.get("move_to_start_step_rad", 0.01)
+    sleep_s = cfg.get("move_to_start_sleep_s", 0.001)
+    max_steps = cfg.get("move_to_start_max_steps", 100)
+    target_mode = cfg.get("move_to_start_target", "config")
+
+    if target_mode == "gello":
+        if agent is None:
+            print("Warning: move_to_start_target=gello but no agent provided, skipping.")
+            return
+        print(
+            f"Slowly aligning YAM to GELLO "
+            f"(step={step_rad} rad, sleep={sleep_s}s, max_steps={max_steps})..."
+        )
+        for step_idx in range(max_steps):
+            obs = env.get_obs()
+            target = np.array(agent.act(obs), dtype=float)
+            current = np.array(obs["joint_positions"], dtype=float)
+            if target.shape != current.shape:
+                print("Warning: Mismatch in joint shapes, skipping move_to_start.")
+                return
+            delta = target - current
+            max_d = float(np.abs(delta).max())
+            if max_d < step_rad:
+                env.step(target)
+                print(f"Aligned to GELLO after {step_idx + 1} steps.")
+                return
+            env.step(current + delta / max_d * step_rad)
+            time.sleep(sleep_s)
+        print(
+            f"Warning: move_to_start reached max_steps ({max_steps}) "
+            "before fully aligned. Check poses or increase move_to_start_max_steps."
+        )
+        return
+
     if bimanual:
         if right_cfg is None:
             return
@@ -222,13 +267,13 @@ def move_to_start_position(
         print("Warning: Mismatch in joint shapes, skipping move_to_start_position.")
         return
 
-    max_delta = (np.abs(curr_joints - reset_joints)).max()
-    steps = min(int(max_delta / 0.01), 100)
+    max_delta = float((np.abs(curr_joints - reset_joints)).max())
+    steps = max(min(int(max_delta / step_rad), max_steps), 1)
 
     print(f"Moving robot to start position: {reset_joints}")
     for jnt in np.linspace(curr_joints, reset_joints, steps):
         env.step(jnt)
-        time.sleep(0.001)
+        time.sleep(sleep_s)
 
 
 def instantiate_from_dict(cfg):

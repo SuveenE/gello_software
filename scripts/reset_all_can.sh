@@ -18,8 +18,11 @@ reset_can_interface() {
 can_interfaces=$(ip link show | grep -oP '(?<=: )(can\w+)')
 
 # Check if any CAN interfaces were found
-if [[ -z "$can_interfaces" ]]; then
+if [ -z "$can_interfaces" ]; then
     echo "No CAN interfaces found."
+    echo "Attach CAN dongles to WSL first (Windows Admin PowerShell):"
+    echo '  usbipd attach --wsl --busid 6-1'
+    echo '  usbipd attach --wsl --busid 6-2'
     exit 1
 fi
 

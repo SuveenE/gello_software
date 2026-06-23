@@ -18,6 +18,16 @@ active_servers = []
 cleanup_in_progress = False
 
 
+def control_loop_kwargs(cfg):
+    """Safety and timing options from YAML config."""
+    hz = cfg.get("hz", 30)
+    return {
+        "max_joint_delta": cfg.get("max_joint_delta"),
+        "max_joint_velocity": cfg.get("max_joint_velocity"),
+        "control_rate_hz": hz,
+    }
+
+
 def cleanup():
     """Clean up resources before exit."""
     global cleanup_in_progress
@@ -124,9 +134,8 @@ def main():
 
     left_robot = instantiate_from_dict(left_robot_cfg)
 
+    right_robot = None
     if bimanual:
-        from gello.robots.robot import BimanualRobot
-
         right_robot_cfg = right_cfg["robot"]
         if isinstance(right_robot_cfg.get("config"), str):
             right_robot_cfg["config"] = OmegaConf.to_container(
@@ -134,9 +143,70 @@ def main():
             )
 
         right_robot = instantiate_from_dict(right_robot_cfg)
-        robot = BimanualRobot(left_robot, right_robot)
+        cfg = left_cfg
+    else:
+        robot = left_robot
+        cfg = left_cfg
 
-        # For bimanual, use the left config for general settings (hz, etc.)
+    # Bimanual simulation: start a MuJoCo server per arm and bridge via ZMQ clients.
+    if (
+        bimanual
+        and hasattr(left_robot, "serve")
+        and hasattr(right_robot, "serve")
+    ):
+        from gello.env import RobotEnv
+        from gello.robots.robot import BimanualRobot
+        from gello.zmq_core.robot_node import ZMQClientRobot
+
+        left_port = left_cfg["robot"].get("port", 6001)
+        right_port = right_cfg["robot"].get("port", 6002)
+        host = left_cfg["robot"].get("host", "127.0.0.1")
+
+        for sim_robot, port, label in [
+            (left_robot, left_port, "left"),
+            (right_robot, right_port, "right"),
+        ]:
+            print(f"Starting {label} simulation server on {host}:{port}...")
+            server_thread = threading.Thread(target=sim_robot.serve, daemon=False)
+            server_thread.start()
+            active_threads.append(server_thread)
+            active_servers.append(sim_robot)
+            wait_for_server_ready(port, host)
+            print(f"{label.capitalize()} simulation server ready!")
+
+        robot_client = BimanualRobot(
+            ZMQClientRobot(port=left_port, host=host),
+            ZMQClientRobot(port=right_port, host=host),
+        )
+        robot = robot_client
+        env = RobotEnv(robot_client, control_rate_hz=cfg.get("hz", 30))
+
+        from gello.utils.launch_utils import move_to_start_position
+
+        move_to_start_position(env, bimanual, left_cfg, right_cfg, agent=agent)
+
+        print(
+            f"Launching robot: {robot.__class__.__name__}, agent: {agent.__class__.__name__}"
+        )
+        print(f"Control loop: {cfg.get('hz', 30)} Hz")
+
+        from gello.utils.control_utils import SaveInterface, run_control_loop
+
+        save_interface = None
+        if args.use_save_interface:
+            save_interface = SaveInterface(
+                data_dir=Path(args.left_config_path).parents[1] / "data",
+                agent_name=agent.__class__.__name__,
+                expand_user=True,
+            )
+
+        run_control_loop(env, agent, save_interface, **control_loop_kwargs(cfg))
+        return
+
+    if bimanual:
+        from gello.robots.robot import BimanualRobot
+
+        robot = BimanualRobot(left_robot, right_robot)
         cfg = left_cfg
     else:
         robot = left_robot
@@ -196,13 +266,19 @@ def main():
 
     env = RobotEnv(robot_client, control_rate_hz=cfg.get("hz", 30))
 
+    hardware_settle_s = cfg.get("hardware_settle_s", 0)
+    is_yam_hardware = "yam.YAMRobot" in left_cfg["robot"].get("_target_", "")
+    if hardware_settle_s > 0 and is_yam_hardware:
+        print(f"Waiting {hardware_settle_s}s for hardware to settle...")
+        time.sleep(hardware_settle_s)
+
     # Move robot to start_joints position if specified in config
     from gello.utils.launch_utils import move_to_start_position
 
     if bimanual:
-        move_to_start_position(env, bimanual, left_cfg, right_cfg)
+        move_to_start_position(env, bimanual, left_cfg, right_cfg, agent=agent)
     else:
-        move_to_start_position(env, bimanual, left_cfg)
+        move_to_start_position(env, bimanual, left_cfg, agent=agent)
 
     print(
         f"Launching robot: {robot.__class__.__name__}, agent: {agent.__class__.__name__}"
@@ -221,7 +297,7 @@ def main():
         )
 
     # Run main control loop
-    run_control_loop(env, agent, save_interface)
+    run_control_loop(env, agent, save_interface, **control_loop_kwargs(cfg))
 
 
 if __name__ == "__main__":

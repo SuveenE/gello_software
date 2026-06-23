@@ -1,7 +1,7 @@
 import pickle
 import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import mujoco
 import mujoco.viewer
@@ -166,6 +166,24 @@ class MujocoRobotServer:
 
         self._print_joints = print_joints
 
+        # YAM gripper is baked into the arm XML; map normalized [0, 1] to finger travel.
+        self._gripper_range: Optional[Tuple[float, float]] = None
+        if not self._has_gripper and self._num_joints > 0:
+            gripper_actuator_id = self._num_joints - 1
+            joint_id = self._model.actuator_trnid[gripper_actuator_id, 0]
+            if self._model.jnt_type[joint_id] == mujoco.mjtJoint.mjJNT_SLIDE:
+                lo, hi = self._model.jnt_range[joint_id]
+                self._gripper_range = (float(lo), float(hi))
+
+    def _map_gripper_command(self, joint_state: np.ndarray) -> np.ndarray:
+        """Map GELLO gripper command (1=open, 0=closed) to MuJoCo finger joint range."""
+        cmd = joint_state.copy()
+        if self._gripper_range is not None:
+            lo, hi = self._gripper_range
+            g = float(np.clip(cmd[-1], 0.0, 1.0))
+            cmd[-1] = lo + (1.0 - g) * (hi - lo)
+        return cmd
+
     def num_dofs(self) -> int:
         return self._num_joints
 
@@ -182,7 +200,7 @@ class MujocoRobotServer:
             _joint_state[-1] = _joint_state[-1] * 255
             self._joint_cmd = _joint_state
         else:
-            self._joint_cmd = joint_state.copy()
+            self._joint_cmd = self._map_gripper_command(joint_state)
 
     def freedrive_enabled(self) -> bool:
         return True
