@@ -23,6 +23,20 @@ outputs/*
 *.ipynb_checkpoints
 *.mypy_cache
 *.pyc
+.env
+.pytest_cache
+.venv/
+env/
+venv/
+
+# data / recordings
+data/
+*.mp4
+*.pkl
+
+# editor
+.idea/
+.vscode/
 
 # vim
 *.swp
