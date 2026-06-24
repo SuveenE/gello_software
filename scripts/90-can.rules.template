@@ -1,0 +1,21 @@
+# GELLO / YAM CAN udev rules for native Ubuntu (SocketCAN / candleLight)
+#
+# 1. Detect your adapter serial numbers:
+#      udevadm info -a -p /sys/class/net/can0 | grep -i serial
+# 2. Replace the serial strings below if they differ from your hardware.
+# 3. Install:
+#      sudo cp scripts/90-can.rules.template /etc/udev/rules.d/90-can.rules
+#      sudo udevadm control --reload-rules && sudo systemctl restart systemd-udevd
+#      Unplug and replug both CAN adapters.
+#
+# GELLO YAML configs expect channel names: can_left / can_right
+
+ACTION=="add|change", SUBSYSTEM=="usb", ATTR{idVendor}=="1d50", ATTR{idProduct}=="606f", RUN+="/sbin/modprobe gs_usb"
+
+SUBSYSTEM=="net", ACTION=="add", ATTRS{serial}=="0047004B33354B0332333837", NAME="can_left", \
+  RUN+="/sbin/ip link set $name type can bitrate 1000000", \
+  RUN+="/sbin/ip link set $name up"
+
+SUBSYSTEM=="net", ACTION=="add", ATTRS{serial}=="0036004733354B0332333837", NAME="can_right", \
+  RUN+="/sbin/ip link set $name type can bitrate 1000000", \
+  RUN+="/sbin/ip link set $name up"
