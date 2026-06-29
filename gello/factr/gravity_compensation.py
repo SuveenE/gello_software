@@ -164,7 +164,16 @@ class FACTRGravityCompensation:
 
         # Control parameters
         self.enable_gravity_comp = self.config["controller"]["gravity_comp"]["enable"]
-        self.gravity_comp_modifier = self.config["controller"]["gravity_comp"]["gain"]
+        # gain may be a single scalar (applied to all joints) or a per-joint list
+        _gc_gain = self.config["controller"]["gravity_comp"]["gain"]
+        if isinstance(_gc_gain, (list, tuple)):
+            self.gravity_comp_modifier = np.array(_gc_gain, dtype=float)
+            assert len(self.gravity_comp_modifier) == self.num_arm_joints, (
+                f"gravity_comp.gain list must have {self.num_arm_joints} entries, "
+                f"got {len(self.gravity_comp_modifier)}"
+            )
+        else:
+            self.gravity_comp_modifier = float(_gc_gain)
         self.tau_g = np.zeros(self.num_arm_joints)
 
         # Friction compensation
@@ -282,10 +291,7 @@ class FACTRGravityCompensation:
                     )
 
         print(f"Loading URDF: {urdf_path}")
-        urdf_model_dir = str(urdf_path.parent)
-        self.pin_model, _, _ = pin.buildModelsFromUrdf(
-            filename=str(urdf_path), package_dirs=urdf_model_dir
-        )
+        self.pin_model = pin.buildModelFromUrdf(str(urdf_path))
         self.pin_data = self.pin_model.createData()
 
     def _calibrate_system(self) -> None:

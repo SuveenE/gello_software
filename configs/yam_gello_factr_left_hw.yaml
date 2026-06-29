@@ -1,0 +1,69 @@
+name: grav_comp_left_hw
+
+dynamixel:
+  dynamixel_port: "usb-FTDI_USB__-__Serial_Converter_FTAO9WA0-if00-port0"
+  servo_types: [
+    "XC330_T288_T", "XC330_T288_T", "XC330_T288_T",
+    "XC330_T288_T", "XC330_T288_T", "XC330_T288_T", "XC330_T288_T"
+  ]
+  joint_signs: [1, -1, -1, -1, 1, 1, 1]
+
+arm_teleop:
+  leader_urdf: "gello/factr/urdf/yam_active_gello/robot.urdf"
+  num_arm_joints: 6
+  arm_joint_limits_max: [3.14159, 3.14159, 3.14159, 3.14159, 3.14159, 3.14159]
+  arm_joint_limits_min: [-3.14159, -3.14159, -3.14159, -3.14159, -3.14159, -3.14159]
+  arm_joint_limits_safety_margin: 0.1
+  initialization:
+    calibration_joint_pos: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    initial_match_joint_pos: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+gripper_teleop:
+  actuation_range: 0.8
+
+controller:
+  frequency: 500
+  torque_feedback:
+    enable: False
+    gain: 3.0
+    damping: 0.0
+    motor_scalar: 94.5652173913
+  gravity_comp:
+    enable: True
+    # Per-joint gravity comp strength [J1, J2, J3, J4, J5, J6].
+    # Raise a joint if it sags, lower it if it floats/oscillates.
+    # (A single scalar like 0.3 also still works.)
+    gain: [0.6, 0.6, 0.6, 0.6, 0.6, 0.6]
+  null_space_regulation:
+    null_space_joint_target: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+    kp: 0.0
+    kd: 0.0
+  static_friction_comp:
+    enable_speed: 0.0
+    gain: 0.0
+  joint_limit_barrier:
+    kp: 0.0
+    kd: 0.0
+  joint_position_control:
+    interpolation_step_size: 0.01
+    kp: 1.03561658022
+    kd: 0.04315069084
+  gripper_feedback:
+    enable: True
+
+teleop:
+  enable: true
+  hz: 30
+  wait_for_server_timeout_s: 5.0
+  robot:
+    _target_: gello.robots.yam.YAMRobot
+    channel: can_left
+  mapping:
+    index_map: [0, 1, 2, 3, 4, 5]
+    # Net follower sign = dynamixel.joint_signs * mapping.signs.
+    # dynamixel.joint_signs already = [1,-1,-1,-1,1,1] (the working direct-config signs),
+    # so mapping.signs must be all 1s to avoid double-inverting joints 3 & 4.
+    signs: [1, 1, 1, 1, 1, 1]
+    offsets: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    auto_align: true
+  gripper_config: [7, 72.2578125, 114.0578125]
