@@ -33,6 +33,12 @@ LEN_PRESENT_VELOCITY = 4
 ADDR_OPERATING_MODE = 11
 CURRENT_CONTROL_MODE = 0
 POSITION_CONTROL_MODE = 3
+ADDR_MIN_POSITION_LIMIT = 48
+ADDR_MAX_POSITION_LIMIT = 52
+LEN_POSITION_LIMIT = 4
+# Extended position range for X-series servos (Protocol 2.0).
+EXTENDED_POSITION_MIN_TICKS = -1_044_479
+EXTENDED_POSITION_MAX_TICKS = 1_044_479
 
 # Servo-specific mappings and limits
 TORQUE_TO_CURRENT_MAPPING = {
@@ -513,6 +519,65 @@ class DynamixelDriver(DynamixelDriverProtocol):
 
     def get_positions(self) -> np.ndarray:
         return self.get_joints()
+
+    def _ticks_to_rad(self, ticks: int) -> float:
+        return ticks / 2048.0 * np.pi
+
+    def _rad_to_ticks(self, angle_rad: float) -> int:
+        return int(angle_rad * 2048.0 / np.pi)
+
+    @staticmethod
+    def _signed_ticks(ticks: int) -> int:
+        if ticks > 0x7FFFFFFF:
+            return ticks - 0x100000000
+        return ticks
+
+    def ticks_to_deg(self, ticks: int) -> float:
+        return float(np.rad2deg(self._ticks_to_rad(self._signed_ticks(ticks)))
+
+    def read_position_limits(self, dxl_id: int) -> Tuple[int, int]:
+        """Read firmware Min/Max Position Limit registers for one servo."""
+        if self._is_fake:
+            return EXTENDED_POSITION_MIN_TICKS, EXTENDED_POSITION_MAX_TICKS
+        with self._lock:
+            min_ticks, dxl_comm_result, dxl_error = self._packetHandler.read4ByteTxRx(
+                self._portHandler, dxl_id, ADDR_MIN_POSITION_LIMIT
+            )
+            if dxl_comm_result != COMM_SUCCESS or dxl_error != 0:
+                raise RuntimeError(
+                    f"Failed to read min position limit for Dynamixel ID {dxl_id}"
+                )
+            max_ticks, dxl_comm_result, dxl_error = self._packetHandler.read4ByteTxRx(
+                self._portHandler, dxl_id, ADDR_MAX_POSITION_LIMIT
+            )
+            if dxl_comm_result != COMM_SUCCESS or dxl_error != 0:
+                raise RuntimeError(
+                    f"Failed to read max position limit for Dynamixel ID {dxl_id}"
+                )
+        return (
+            int(self._signed_ticks(min_ticks)),
+            int(self._signed_ticks(max_ticks)),
+        )
+
+    def write_position_limits(self, dxl_id: int, min_ticks: int, max_ticks: int) -> None:
+        """Write firmware Min/Max Position Limit registers for one servo."""
+        if self._is_fake:
+            return
+        with self._lock:
+            dxl_comm_result, dxl_error = self._packetHandler.write4ByteTxRx(
+                self._portHandler, dxl_id, ADDR_MIN_POSITION_LIMIT, int(min_ticks)
+            )
+            if dxl_comm_result != COMM_SUCCESS or dxl_error != 0:
+                raise RuntimeError(
+                    f"Failed to write min position limit for Dynamixel ID {dxl_id}"
+                )
+            dxl_comm_result, dxl_error = self._packetHandler.write4ByteTxRx(
+                self._portHandler, dxl_id, ADDR_MAX_POSITION_LIMIT, int(max_ticks)
+            )
+            if dxl_comm_result != COMM_SUCCESS or dxl_error != 0:
+                raise RuntimeError(
+                    f"Failed to write max position limit for Dynamixel ID {dxl_id}"
+                )
 
     def _check_port_availability(self) -> bool:
         """Check if the port is available and not being used by other processes."""

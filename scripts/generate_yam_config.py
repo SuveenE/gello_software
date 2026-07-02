@@ -186,7 +186,7 @@ def update_config_with_offsets(
     # Set gripper start position to open (1.0) if gripper exists
     start_joints = list(config["agent"]["start_joints"])
     if len(start_joints) == 7:
-        start_joints[6] = 1.0
+        start_joints[6] = 0.0
     config["agent"]["start_joints"] = to_flow_list(start_joints)
 
     return config
