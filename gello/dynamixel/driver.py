@@ -533,7 +533,7 @@ class DynamixelDriver(DynamixelDriverProtocol):
         return ticks
 
     def ticks_to_deg(self, ticks: int) -> float:
-        return float(np.rad2deg(self._ticks_to_rad(self._signed_ticks(ticks)))
+        return float(np.rad2deg(self._ticks_to_rad(self._signed_ticks(ticks))))
 
     def read_position_limits(self, dxl_id: int) -> Tuple[int, int]:
         """Read firmware Min/Max Position Limit registers for one servo."""
