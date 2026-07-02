@@ -171,7 +171,7 @@ def update_config_with_offsets(
 
     # Update gripper config if present
     if gripper_config and "gripper_config" in dynamixel_config:
-        gripper_vals = [7, gripper_config[1], gripper_config[0]]
+        gripper_vals = [7, gripper_config[0], gripper_config[1]]
         dynamixel_config["gripper_config"] = to_flow_list(
             gripper_vals, preserve_ints=True
         )
