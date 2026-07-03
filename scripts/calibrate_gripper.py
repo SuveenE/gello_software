@@ -11,9 +11,10 @@ released trigger position.
 
 This script:
   1. Reads firmware position limits on joint 7
-  2. Auto-sweeps open -> close -> open to capture the real travel range
-  3. Writes gripper_config using measured endpoints (+ optional close padding)
-  4. Can update servo limits to match the measured sweep
+  2. Auto-sweeps the trigger to capture min/max travel
+  3. Re-measures the released rest position as open (avoids stale pre-sweep readings)
+  4. Writes gripper_config using measured endpoints (+ optional close padding)
+  5. Can update servo limits to match the measured sweep
 
 Usage (right arm):
   python scripts/calibrate_gripper.py \\
@@ -103,6 +104,13 @@ def apply_close_padding(open_deg: float, close_measured: float, padding_deg: flo
     if close_measured < open_deg:
         return close_measured + padding_deg
     return close_measured - padding_deg
+
+
+def pick_close_deg(open_deg: float, min_deg: float, max_deg: float) -> float:
+    """Return the sweep endpoint farthest from the released (open) position."""
+    if abs(min_deg - open_deg) >= abs(max_deg - open_deg):
+        return min_deg
+    return max_deg
 
 
 def format_gripper_config(joint_id: int, open_deg: float, close_deg: float) -> list:
@@ -259,18 +267,21 @@ def main(args: Args) -> None:
     print_limits(driver, args.gripper_joint_id)
 
     print()
-    print("Step 1: Hold the trigger fully OPEN (released).")
-    input("Press Enter when ready...")
-    open_deg = read_gripper_deg(driver)
-    print(f"  open = {open_deg:.5f}°")
-
+    print("Step 1: Sweep the trigger through its full range.")
     min_deg, max_deg, span = sweep_trigger_range(driver, args.sweep_seconds)
-    close_deg = min_deg if abs(min_deg - open_deg) >= abs(max_deg - open_deg) else max_deg
     if span < 5.0:
         print(
             "WARNING: squeeze span is very small. The Dynamixel position limits may be "
             "too tight — try --restore-full-range or --set-limits-from-sweep."
         )
+
+    print()
+    print("Step 2: Release the trigger to its natural rest position (fully open).")
+    input("Press Enter when ready...")
+    open_deg = read_gripper_deg(driver)
+    close_deg = pick_close_deg(open_deg, min_deg, max_deg)
+    print(f"  open  (released rest) = {open_deg:.5f}°")
+    print(f"  close (from sweep)    = {close_deg:.5f}°")
     if abs(close_deg - open_deg) < 1.0:
         raise RuntimeError("Open and close are too close. Check joint 7 and servo limits.")
 
@@ -285,6 +296,11 @@ def main(args: Args) -> None:
     print(f"  close (fully squeezed)    = {close_deg:.5f}°  -> g={g_at_close:.3f}")
     print(f"  close in config           = {close_config:.5f}°  (padding {args.close_padding_deg:.1f}°)")
     print(f"  current trigger at rest   = g={g_at_rest:.3f}  (should be ~0.0 when released)")
+    if g_at_rest > 0.05:
+        print(
+            "WARNING: g is not near 0 at rest. Re-check that the trigger is fully "
+            "released, or run with --restore-full-range if the Dynamixel limits are tight."
+        )
 
     if args.set_limits_from_sweep:
         write_limits_for_sweep(
