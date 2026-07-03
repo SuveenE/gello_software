@@ -14,8 +14,8 @@ Usage:
   # raw serial lines
   python3 scripts/test_joystick.py --port /dev/ttyUSB0 --raw
 
-Move the stick through its full range for a few seconds so min/max auto-calibrate.
-Press the stick button to confirm SW wiring. Ctrl+C to exit.
+Move the stick to test. Ctrl+C to exit. Normalization uses fixed ADC center/span
+(no startup calibration wiggle required).
 
 WSL note: USB serial devices must be attached to WSL with `usbipd` on Windows,
 e.g. `usbipd attach --wsl --busid <BUSID>`, before the port appears here.
@@ -73,6 +73,15 @@ class Args:
 
     invert_y: bool = False
     """Flip screen up/down."""
+
+    center_x: int = 512
+    """Resting ADC value for VRX (A0)."""
+
+    center_y: int = 512
+    """Resting ADC value for VRY (A1)."""
+
+    half_span: int = 512
+    """ADC counts from center to full deflection (1023-scale)."""
 
 
 def apply_axis_map(nx: float, ny: float, args: Args) -> Tuple[float, float]:
@@ -139,6 +148,24 @@ def parse_args() -> "Args":
         action="store_true",
         help="Flip screen up/down.",
     )
+    parser.add_argument(
+        "--center-x",
+        type=int,
+        default=512,
+        help="Resting ADC value for VRX/A0 (default 512).",
+    )
+    parser.add_argument(
+        "--center-y",
+        type=int,
+        default=512,
+        help="Resting ADC value for VRY/A1 (default 512).",
+    )
+    parser.add_argument(
+        "--half-span",
+        type=int,
+        default=512,
+        help="ADC counts from center to full deflection (default 512).",
+    )
     ns = parser.parse_args()
     return Args(
         port=ns.port,
@@ -150,6 +177,9 @@ def parse_args() -> "Args":
         swap_xy=not ns.no_swap_xy,
         invert_x=ns.invert_x,
         invert_y=ns.invert_y,
+        center_x=ns.center_x,
+        center_y=ns.center_y,
+        half_span=ns.half_span,
     )
 
 
@@ -206,29 +236,13 @@ def parse_line(line: str) -> Optional[Tuple[int, int, int]]:
     return x, y, sw
 
 
-class AxisCalibration:
-    """Tracks observed min/center/max and normalizes a raw axis to [-1, 1]."""
-
-    def __init__(self, center: int):
-        self.min = center
-        self.max = center
-        self.center = center
-
-    def update(self, raw: int) -> None:
-        self.min = min(self.min, raw)
-        self.max = max(self.max, raw)
-
-    def normalize(self, raw: int, deadzone: float) -> float:
-        pos_span = max(self.max - self.center, 1)
-        neg_span = max(self.center - self.min, 1)
-        if raw >= self.center:
-            value = (raw - self.center) / pos_span
-        else:
-            value = (raw - self.center) / neg_span
-        value = max(-1.0, min(1.0, value))
-        if abs(value) < deadzone:
-            return 0.0
-        return value
+def normalize_axis(raw: int, center: int, half_span: int, deadzone: float) -> float:
+    """Map raw ADC to [-1, 1] using fixed center and span (no runtime learning)."""
+    value = (raw - center) / max(half_span, 1)
+    value = max(-1.0, min(1.0, value))
+    if abs(value) < deadzone:
+        return 0.0
+    return value
 
 
 def render_bar(value: float, width: int) -> str:
@@ -282,24 +296,11 @@ def run_raw(ser: serial.Serial) -> None:
 
 
 def run_dashboard(ser: serial.Serial, args: Args) -> None:
-    cal_x: Optional[AxisCalibration] = None
-    cal_y: Optional[AxisCalibration] = None
     samples = 0
     last_rate_t = time.time()
     last_rate_samples = 0
     rate_hz = 0.0
     button_latched = False
-
-    # Prime calibration with the first valid sample as the resting center.
-    print("Waiting for joystick data...")
-    while cal_x is None:
-        line = ser.readline().decode(errors="replace")
-        parsed = parse_line(line)
-        if parsed is None:
-            continue
-        x, y, _ = parsed
-        cal_x = AxisCalibration(x)
-        cal_y = AxisCalibration(y)
 
     sys.stdout.write("\033[2J")  # clear screen once
     while True:
@@ -308,10 +309,8 @@ def run_dashboard(ser: serial.Serial, args: Args) -> None:
         if parsed is None:
             continue
         x, y, sw = parsed
-        cal_x.update(x)
-        cal_y.update(y)
-        nx_raw = cal_x.normalize(x, args.deadzone)
-        ny_raw = cal_y.normalize(y, args.deadzone)
+        nx_raw = normalize_axis(x, args.center_x, args.half_span, args.deadzone)
+        ny_raw = normalize_axis(y, args.center_y, args.half_span, args.deadzone)
         nx, ny = apply_axis_map(nx_raw, ny_raw, args)
         pressed = sw == 0
         if pressed:
@@ -368,13 +367,8 @@ def run_dashboard(ser: serial.Serial, args: Args) -> None:
             out.append("   " + g)
         out.append("")
         out.append(
-            "  center X={} Y={}   rangeX [{},{}]   rangeY [{},{}]".format(
-                cal_x.center, cal_y.center, cal_x.min, cal_x.max, cal_y.min, cal_y.max
-            )
-        )
-        out.append(
-            "  samples {}   rate {:.1f} Hz   (move stick fully to calibrate; Ctrl+C to exit)".format(
-                samples, rate_hz
+            "  center X={} Y={} span {}   rate {:.1f} Hz   Ctrl+C to exit".format(
+                args.center_x, args.center_y, args.half_span, rate_hz
             )
         )
 
