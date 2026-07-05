@@ -241,12 +241,16 @@ def probe_port_id(
     device: str,
     baud: int = 115200,
     boot_wait: float = 2.0,
-    read_timeout: float = 1.5,
+    read_timeout: float = 2.5,
+    query_interval: float = 0.25,
 ) -> Optional[str]:
     """Return the firmware ``JOYSTICK_ID`` reported by the board on ``device``.
 
-    Opening the port resets most Nano boards, so we wait for boot, then send a
-    ``?`` query byte and look for the ``# ID:<value>`` banner the sketch prints.
+    Opening the port resets most Nano boards, so we wait for boot, then keep
+    sending a ``?`` query byte while looking for the ``# ID:<value>`` banner the
+    sketch prints. We re-send ``?`` throughout the read window rather than once:
+    reset timing differs across OS/USB drivers (notably macOS vs Linux FTDI), so
+    a single query can land while the board is still booting and get dropped.
     Returns ``None`` if the board reports no ID (older/blank firmware) or the
     port cannot be read. Consumes the serial port for the duration of the probe.
     """
@@ -257,12 +261,16 @@ def probe_port_id(
     try:
         time.sleep(boot_wait)
         ser.reset_input_buffer()
-        try:
-            ser.write(b"?")
-        except (serial.SerialException, OSError):
-            pass
         deadline = time.time() + read_timeout
+        next_query = 0.0
         while time.time() < deadline:
+            now = time.time()
+            if now >= next_query:
+                try:
+                    ser.write(b"?")
+                except (serial.SerialException, OSError):
+                    pass
+                next_query = now + query_interval
             line = ser.readline().decode(errors="replace").strip()
             if line.startswith(ID_BANNER_PREFIX):
                 return line[len(ID_BANNER_PREFIX):].strip()
