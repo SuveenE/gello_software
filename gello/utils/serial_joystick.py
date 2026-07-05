@@ -309,8 +309,16 @@ def format_port_table(
     for i, info in enumerate(infos):
         suffix = ""
         if probe_ids:
-            jid = probe_port_id(info.device)
-            suffix = f"\n      firmware-id: {jid}" if jid else "\n      firmware-id: (none)"
+            if not os.access(info.device, os.R_OK | os.W_OK):
+                suffix = (
+                    "\n      firmware-id: (no access — add your user to the "
+                    "'dialout' group: sudo usermod -aG dialout $USER)"
+                )
+            else:
+                jid = probe_port_id(info.device)
+                suffix = (
+                    f"\n      firmware-id: {jid}" if jid else "\n      firmware-id: (none)"
+                )
         lines.append(f"  [{i}] {info.describe()}{suffix}")
     return "\n".join(lines)
 
