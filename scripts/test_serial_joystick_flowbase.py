@@ -14,13 +14,18 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 from typing import List
 
 import numpy as np
 
-from gello.utils.serial_joystick import (
+# Allow running directly (python3 scripts/...) without `pip install -e .` by
+# adding the gello_software repo root (parent of scripts/) to the import path.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from gello.utils.serial_joystick import (  # noqa: E402
     FLOWBASE_DEADZONE,
     SerialJoystick,
     SerialJoystickConfig,

@@ -12,10 +12,25 @@
  *   <x>,<y>,<sw>\n
  * where x,y are 0..1023 raw ADC counts and sw is 1 (released) or 0 (pressed).
  *
+ * Board identity (for using two sticks): tag each board LEFT or RIGHT below
+ * before flashing. On boot, and whenever the host sends a '?' byte, the board
+ * replies with a banner line:
+ *   # ID:<JOYSTICK_ID>
+ * Banner lines start with '#' so the CSV parser ignores them. This lets you
+ * tell two otherwise-identical clone boards apart (e.g. two FTDI chips sharing
+ * the same USB serial) regardless of which /dev/ttyUSB* they enumerate as, and
+ * lets the client auto-assign roles with `--auto-id`.
+ *
  * Upload with the Arduino IDE / arduino-cli, selecting the "Arduino Nano"
  * board (use the "ATmega328P (Old Bootloader)" processor variant if a normal
  * upload fails on a clone board).
  */
+
+// ===== TAG THIS BOARD: uncomment exactly ONE line before flashing =====
+#define JOYSTICK_ID "LEFT"     // left stick  -> translation (forward/strafe)
+// #define JOYSTICK_ID "RIGHT"  // right stick -> rotation (yaw) + linear rail
+// #define JOYSTICK_ID ""       // single-stick / testing: no id banner
+// ======================================================================
 
 const int PIN_VRX = A0;
 const int PIN_VRY = A1;
@@ -25,12 +40,27 @@ const unsigned long SAMPLE_INTERVAL_MS = 20;  // ~50 Hz
 
 unsigned long last_sample_ms = 0;
 
+void print_id_banner() {
+  if (sizeof(JOYSTICK_ID) > 1) {  // non-empty string literal
+    Serial.print(F("# ID:"));
+    Serial.println(F(JOYSTICK_ID));
+  }
+}
+
 void setup() {
   Serial.begin(115200);
   pinMode(PIN_SW, INPUT_PULLUP);  // switch pulls to GND when pressed
+  print_id_banner();
 }
 
 void loop() {
+  // Respond to an identity query at any time without blocking the sample loop.
+  while (Serial.available() > 0) {
+    if (Serial.read() == '?') {
+      print_id_banner();
+    }
+  }
+
   const unsigned long now = millis();
   if (now - last_sample_ms < SAMPLE_INTERVAL_MS) {
     return;

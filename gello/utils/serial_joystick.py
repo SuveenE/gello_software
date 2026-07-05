@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import glob
 import math
+import os
+import threading
 import time
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
@@ -23,6 +25,12 @@ ADC_HALF_SPAN = 512
 # FlowBase gamepad path uses 0.05 for base translation/rotation.
 FLOWBASE_DEADZONE = 0.05
 DEFAULT_CROSS_AXIS_CONE_DEG = 25.0
+
+# Right-stick (rotation + linear rail) constants, mirroring the USB gamepad path
+# in i2rt.utils.gamepad_utils / flow_base_joystick_client.py.
+RAIL_DEADZONE = 0.15  # Larger deadzone so a resting stick never drives the rail.
+DEFAULT_RIGHT_STICK_CONE_DEG = 10.0
+DEFAULT_LIFT_MAX_VEL_MS = 0.5  # Right-stick Y full deflection -> rail m/s.
 
 KNOWN_VID_PID = (0x2341, 0x2A03, 0x1A86, 0x0403, 0x10C4)
 
@@ -52,6 +60,22 @@ def apply_axis_dominance(x: float, y: float, cone_ratio: float) -> tuple[float, 
     elif ax < cone_ratio * ay:
         x = 0.0
     return x, y
+
+
+def gate_to_cardinal(x: float, y: float, cone_ratio: float) -> Tuple[float, float]:
+    """Keep each axis only when the push is near its OWN cardinal direction.
+
+    Same as ``i2rt.utils.gamepad_utils.gate_to_cardinal``: used for the right
+    stick so rotation (X) and rail (Y) do not cross-talk. ``x`` survives only
+    when ``|y| <= cone_ratio * |x|`` and vice-versa; diagonal pushes move
+    neither. A non-positive ratio disables the filter.
+    """
+    if cone_ratio <= 0.0:
+        return x, y
+    ax, ay = abs(x), abs(y)
+    x_out = x if ay <= cone_ratio * ax else 0.0
+    y_out = y if ax <= cone_ratio * ay else 0.0
+    return x_out, y_out
 
 
 def normalize_axis(raw: int, center: int, half_span: int, deadzone: float) -> float:
@@ -94,6 +118,30 @@ def screen_to_flowbase(
     return cmd
 
 
+def screen_to_yaw_rail(
+    screen_lr: float,
+    screen_ud: float,
+    *,
+    cone_ratio: float,
+    lift_max_vel_ms: float = DEFAULT_LIFT_MAX_VEL_MS,
+    yaw_deadzone: float = FLOWBASE_DEADZONE,
+    rail_deadzone: float = RAIL_DEADZONE,
+) -> Tuple[float, float]:
+    """Map a right-stick reading to ``(yaw, rail_mps)``.
+
+    Left/right drives yaw (normalised ``[-1, 1]``, scaled by the controller's
+    ``max_vel``); up/down drives the linear rail in physical m/s (up = positive).
+    Uses the same cardinal gating as the USB gamepad's right stick so rotation
+    and rail do not cross-talk.
+    """
+    yaw, rail = gate_to_cardinal(screen_lr, screen_ud, cone_ratio)
+    if abs(yaw) < yaw_deadzone:
+        yaw = 0.0
+    if abs(rail) < rail_deadzone:
+        rail = 0.0
+    return yaw, rail * lift_max_vel_ms
+
+
 def parse_line(line: str) -> Optional[Tuple[int, int, int]]:
     parts = line.strip().split(",")
     if len(parts) != 3:
@@ -120,6 +168,143 @@ def find_serial_ports() -> List[str]:
         if dev not in preferred and dev not in others:
             others.append(dev)
     return preferred + others
+
+
+def _symlink_targets(directory: str) -> dict:
+    """Map realpath(target) -> [symlink, ...] for a /dev/serial/by-* directory."""
+    mapping: dict = {}
+    try:
+        entries = os.listdir(directory)
+    except OSError:
+        return mapping
+    for name in entries:
+        link = os.path.join(directory, name)
+        try:
+            target = os.path.realpath(link)
+        except OSError:
+            continue
+        mapping.setdefault(target, []).append(link)
+    return mapping
+
+
+@dataclass
+class PortInfo:
+    """Stable-identity metadata for a serial port."""
+
+    device: str
+    by_id: Optional[str] = None
+    by_path: Optional[str] = None
+    serial_number: Optional[str] = None
+    vid: Optional[int] = None
+    pid: Optional[int] = None
+    description: Optional[str] = None
+
+    def describe(self) -> str:
+        vid_pid = ""
+        if self.vid is not None and self.pid is not None:
+            vid_pid = f" [{self.vid:04x}:{self.pid:04x}]"
+        serial = f" serial={self.serial_number}" if self.serial_number else ""
+        by_id = f"\n      by-id:   {self.by_id}" if self.by_id else ""
+        by_path = f"\n      by-path: {self.by_path}" if self.by_path else ""
+        return f"{self.device}{vid_pid}{serial}{by_id}{by_path}"
+
+
+def list_joystick_ports() -> List[PortInfo]:
+    """Return rich, stable-identity info for candidate joystick serial ports."""
+    by_id = _symlink_targets("/dev/serial/by-id")
+    by_path = _symlink_targets("/dev/serial/by-path")
+    infos: List[PortInfo] = []
+    for dev in find_serial_ports():
+        real = os.path.realpath(dev)
+        meta = next(
+            (p for p in list_ports.comports() if p.device == dev),
+            None,
+        )
+        infos.append(
+            PortInfo(
+                device=dev,
+                by_id=(by_id.get(real, [None])[0]),
+                by_path=(by_path.get(real, [None])[0]),
+                serial_number=getattr(meta, "serial_number", None),
+                vid=getattr(meta, "vid", None),
+                pid=getattr(meta, "pid", None),
+                description=getattr(meta, "description", None),
+            )
+        )
+    return infos
+
+
+ID_BANNER_PREFIX = "# ID:"
+
+
+def probe_port_id(
+    device: str,
+    baud: int = 115200,
+    boot_wait: float = 2.0,
+    read_timeout: float = 1.5,
+) -> Optional[str]:
+    """Return the firmware ``JOYSTICK_ID`` reported by the board on ``device``.
+
+    Opening the port resets most Nano boards, so we wait for boot, then send a
+    ``?`` query byte and look for the ``# ID:<value>`` banner the sketch prints.
+    Returns ``None`` if the board reports no ID (older/blank firmware) or the
+    port cannot be read. Consumes the serial port for the duration of the probe.
+    """
+    try:
+        ser = serial.Serial(device, baud, timeout=0.2)
+    except (serial.SerialException, OSError):
+        return None
+    try:
+        time.sleep(boot_wait)
+        ser.reset_input_buffer()
+        try:
+            ser.write(b"?")
+        except (serial.SerialException, OSError):
+            pass
+        deadline = time.time() + read_timeout
+        while time.time() < deadline:
+            line = ser.readline().decode(errors="replace").strip()
+            if line.startswith(ID_BANNER_PREFIX):
+                return line[len(ID_BANNER_PREFIX):].strip()
+        return None
+    finally:
+        ser.close()
+
+
+def resolve_ports_by_firmware_id(
+    wanted_ids: List[str],
+    baud: int = 115200,
+) -> dict:
+    """Map each wanted firmware ID to the serial device reporting it.
+
+    Probes every candidate port once. Returns ``{id: device}`` for the ids that
+    were found (missing ids are simply absent from the dict). Robust to
+    identical USB serial numbers / unstable device names because identity comes
+    from the firmware, not the OS device path.
+    """
+    found: dict = {}
+    for info in list_joystick_ports():
+        jid = probe_port_id(info.device, baud=baud)
+        if jid in wanted_ids and jid not in found:
+            found[jid] = info.device
+    return found
+
+
+def format_port_table(
+    infos: Optional[List[PortInfo]] = None, probe_ids: bool = False
+) -> str:
+    if infos is None:
+        infos = list_joystick_ports()
+    if not infos:
+        return "No serial ports found."
+    lines = [f"Found {len(infos)} serial port(s):"]
+    for i, info in enumerate(infos):
+        suffix = ""
+        if probe_ids:
+            jid = probe_port_id(info.device)
+            suffix = f"\n      firmware-id: {jid}" if jid else "\n      firmware-id: (none)"
+        lines.append(f"  [{i}] {info.describe()}{suffix}")
+    return "\n".join(lines)
 
 
 def resolve_port(requested: Optional[str]) -> str:
@@ -149,19 +334,58 @@ class SerialJoystickSample:
 class SerialJoystick:
     """Read Arduino joystick serial stream and expose FlowBase user commands."""
 
-    def __init__(self, config: SerialJoystickConfig):
+    def __init__(self, config: SerialJoystickConfig, *, timeout: float = 1.0):
         self.config = config
         self._cone_ratio = math.tan(math.radians(config.cross_axis_cone_deg))
         port = resolve_port(config.port)
         try:
-            self._ser = serial.Serial(port, config.baud, timeout=1.0)
+            self._ser = serial.Serial(port, config.baud, timeout=timeout)
         except serial.SerialException as e:
             raise RuntimeError(f"Failed to open {port}: {e}") from e
         self.port = port
         time.sleep(2.0)
         self._ser.reset_input_buffer()
 
+        self._latest: Optional[SerialJoystickSample] = None
+        self._latest_lock = threading.Lock()
+        self._reader_thread: Optional[threading.Thread] = None
+        self._running = False
+
+    def start_background(self) -> SerialJoystick:
+        """Start a daemon thread that keeps ``get_latest()`` fresh.
+
+        Use this when reading multiple joysticks concurrently: a blocking
+        ``read_sample_blocking()`` on one port would otherwise stall the others.
+        """
+        if self._reader_thread is not None:
+            return self
+        self._running = True
+        self._reader_thread = threading.Thread(
+            target=self._reader_loop, name=f"joystick-{self.port}", daemon=True
+        )
+        self._reader_thread.start()
+        return self
+
+    def _reader_loop(self) -> None:
+        while self._running:
+            try:
+                sample = self.read_sample()
+            except (serial.SerialException, OSError):
+                break
+            if sample is not None:
+                with self._latest_lock:
+                    self._latest = sample
+
+    def get_latest(self) -> Optional[SerialJoystickSample]:
+        """Return the most recent sample from the background reader (or None)."""
+        with self._latest_lock:
+            return self._latest
+
     def close(self) -> None:
+        self._running = False
+        if self._reader_thread is not None:
+            self._reader_thread.join(timeout=1.5)
+            self._reader_thread = None
         self._ser.close()
 
     def read_sample(self) -> Optional[SerialJoystickSample]:

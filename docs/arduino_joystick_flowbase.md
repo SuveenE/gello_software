@@ -75,10 +75,84 @@ cd ~/lerobot/i2rt && pip install -e .
 |--------|---------|
 | `scripts/test_joystick.py` | Test stick + button, screen dashboard |
 | `scripts/test_serial_joystick_flowbase.py` | Preview FlowBase mapping (safe, no robot motion) |
-| `scripts/flow_base_serial_joystick_client.py` | **Drive the base** over RPC |
-| `gello/utils/serial_joystick.py` | Shared reader + axis mapping |
+| `scripts/flow_base_serial_joystick_client.py` | **Drive the base** over RPC (1 or 2 sticks) |
+| `gello/utils/serial_joystick.py` | Shared reader + axis mapping + port detection |
+
+## Telling two sticks apart
+
+Two USB serial adapters enumerate as `/dev/ttyUSB0` and `/dev/ttyUSB1`, but the
+order can swap between reboots. Use a **stable identity** instead:
+
+- **`/dev/serial/by-id/...`** — unique per chip. FTDI (FT232R) boards each carry
+  a unique serial number, so this is the most robust. Many CH340 clones ship
+  with **no serial number**, so their by-id paths collide (fall back to by-path
+  or a firmware ID below).
+- **`/dev/serial/by-path/...`** — unique per physical USB port. Works even for
+  identical CH340 clones, as long as each stick stays in the same port.
+- **Firmware ID** — set `#define JOYSTICK_ID "LEFT"` / `"RIGHT"` in
+  `joystick_test.ino` and flash each board. On boot / on a `?` byte the board
+  prints `# ID:LEFT`. This survives cable swaps and clone collisions.
+
+List detected ports (with stable paths and each board's firmware id):
+
+```bash
+python3 scripts/flow_base_serial_joystick_client.py --list
+```
+
+Handy raw commands:
+
+```bash
+# Linux
+ls -l /dev/serial/by-id/ /dev/serial/by-path/
+udevadm info -q property -n /dev/ttyUSB0 | grep -E 'ID_SERIAL|ID_PATH|ID_VENDOR_ID'
+
+# macOS
+ls -1 /dev/cu.usbserial-*
+ioreg -r -c IOUSBHostDevice -l | grep -E 'USB Product Name|USB Serial Number'
+```
+
+### Both adapters show the SAME serial number
+
+Cheap/clone **FTDI FT232R** (and many CH340) chips are often flashed with an
+identical hard-coded serial (e.g. every board reports `A5069RR4`). Then:
+
+- **Linux** still creates two nodes (`ttyUSB0`, `ttyUSB1`), but their
+  `by-id` paths collide. Use **`/dev/serial/by-path/...`** (unique per physical
+  USB port) — no reflash needed. This is the easy fix on the Leader PC.
+- **macOS** derives the node name from the serial, so you get one
+  `/dev/cu.usbserial-A5069RR4` and a fallback like `/dev/cu.usbserial-3`, and
+  the mapping is not stable across replug.
+
+Two reliable fixes that work everywhere:
+
+1. **Firmware id (recommended, no hardware tools).** Flash each Nano with a
+   unique `#define JOYSTICK_ID "LEFT"` / `"RIGHT"` in `joystick_test.ino`, then
+   let the client assign roles by asking each board who it is:
+
+   ```bash
+   python3 scripts/flow_base_serial_joystick_client.py --host 192.168.50.91 --auto-id
+   ```
+
+   `--auto-id` probes every port, reads the `# ID:` banner, and maps
+   `--left-id`/`--right-id` (default `LEFT`/`RIGHT`) to the right device
+   regardless of the OS device name. `--list` shows each board's reported id.
+
+2. **Reprogram a unique USB serial into the FTDI EEPROM** (permanent). Plug in
+   ONE board at a time and write a new serial with `pyftdi`:
+
+   ```bash
+   pip install pyftdi
+   # with a single FTDI attached:
+   ftconf ftdi://ftdi:232 -s LEFTJOY -o /dev/null   # then repeat for RIGHTJOY
+   ```
+
+   (On Windows, FTDI's FT_PROG does the same. Avoid FTDI's old bricking driver;
+   pyftdi/libftdi are safe.) After this, `by-id` / `usbserial-<serial>` names
+   are unique again.
 
 ## Axis mapping
+
+### Single stick (translation only)
 
 Defaults match a 90°-mounted stick (no extra flags needed):
 
@@ -88,6 +162,22 @@ Defaults match a 90°-mounted stick (no extra flags needed):
 | Left / right | Strafe (`user_cmd[1]`) |
 | — | Yaw = 0 (single stick, no rotation) |
 | Button press | Toggle local ↔ global frame |
+
+### Two sticks (full 4-DOF, matches the USB gamepad)
+
+Pass both `--left-port` and `--right-port` to enable dual mode:
+
+| Stick | Physical | FlowBase command |
+|-------|----------|------------------|
+| Left | Up / down | Forward / back (`user_cmd[0]`) |
+| Left | Left / right | Strafe (`user_cmd[1]`) |
+| Left | Button | Toggle local ↔ global frame |
+| Right | Left / right | Yaw / rotation (`user_cmd[2]`) |
+| Right | Up / down | Linear rail m/s (up = raise) |
+| Right | Button | Reset odometry |
+
+The right stick uses the same 10° cardinal gate as the gamepad so rotation and
+rail don't cross-talk (`--right-stick-cone-deg`, `--lift-max-vel-ms`).
 
 Normalization uses fixed ADC center **512** and span **512** (no startup calibration wiggle).
 
@@ -125,13 +215,25 @@ python3 i2rt/i2rt/flow_base/flow_base_controller.py \
   --no-gamepad
 ```
 
-On the **operator PC** with the Nano plugged in:
+On the **operator PC** with the Nano(s) plugged in.
+
+Single stick (translation only):
 
 ```bash
 cd ~/lerobot/gello_software
 python3 scripts/flow_base_serial_joystick_client.py \
   --host 172.6.2.20 \
   --port /dev/serial/by-id/usb-FTDI_FT232R_USB_UART_A5069RR4-if00-port0
+```
+
+Two sticks (full 4-DOF: left translates, right rotates + lifts the rail):
+
+```bash
+cd ~/lerobot/gello_software
+python3 scripts/flow_base_serial_joystick_client.py \
+  --host 172.6.2.20 \
+  --left-port  /dev/serial/by-id/usb-FTDI_FT232R_USB_UART_A5069RR4-if00-port0 \
+  --right-port /dev/serial/by-id/usb-FTDI_FT232R_USB_UART_B0012XYZ-if00-port0
 ```
 
 Commands stream at 50 Hz. If the client disconnects, the base stops after **0.2 s**.
@@ -155,5 +257,6 @@ All joystick + FlowBase tooling lives on **`weining-joystick`** in `gello_softwa
 
 ## Limitations
 
-- Single stick covers **translation only** (no yaw or linear rail lift).
-- For full 4-DOF control (base + rail + rotation), use the original USB gamepad or add a second stick / extra inputs.
+- A **single** stick covers **translation only** (no yaw or linear rail lift).
+- For full 4-DOF control (translation + rotation + rail), use **two sticks**
+  (`--left-port` + `--right-port`) or the original USB gamepad.
