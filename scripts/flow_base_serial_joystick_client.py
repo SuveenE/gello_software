@@ -291,6 +291,17 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--no-auto-id-fallback",
+        action="store_true",
+        dest="no_auto_id_fallback",
+        help=(
+            "Disable the --auto-id fallback. By default, if exactly one stick is "
+            "firmware-identified and exactly one other joystick port is left over, "
+            "that leftover is assigned to the missing role (handles a board with a "
+            "blank/old id). Pass this to require both ids to be reported."
+        ),
+    )
+    parser.add_argument(
         "--left-id",
         default=os.environ.get("JOYSTICK_LEFT_ID", "LEFT"),
         help="Firmware id of the LEFT stick for --auto-id (default: LEFT).",
@@ -360,7 +371,10 @@ def main() -> None:
     if args.auto_id:
         print(f"Resolving ports by firmware id ({args.left_id!r}, {args.right_id!r})...")
         found = resolve_ports_by_firmware_id(
-            [args.left_id, args.right_id], baud=args.baud, exclude=exclude_ports
+            [args.left_id, args.right_id],
+            baud=args.baud,
+            exclude=exclude_ports,
+            fallback_single=not args.no_auto_id_fallback,
         )
         args.left_port = found.get(args.left_id, args.left_port)
         args.right_port = found.get(args.right_id, args.right_port)

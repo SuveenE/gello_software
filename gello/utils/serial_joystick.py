@@ -322,6 +322,7 @@ def resolve_ports_by_firmware_id(
     wanted_ids: List[str],
     baud: int = 115200,
     exclude: Optional[Iterable[str]] = None,
+    fallback_single: bool = False,
 ) -> dict:
     """Map each wanted firmware ID to the serial device reporting it.
 
@@ -334,12 +335,49 @@ def resolve_ports_by_firmware_id(
     realpath, so by-id/by-path aliases resolve too). Pass the GELLO arm ports
     here so the probe's port reset / ``?`` writes don't collide with the running
     Dynamixel leader servers and trigger COMM_RX_TIMEOUT (-3001).
+
+    ``fallback_single``: when exactly one of two wanted ids is firmware-identified
+    and exactly one other USB-serial candidate port remains unclaimed (e.g. a
+    board flashed with a blank/old id that reports no banner), infer that leftover
+    as the missing role. Only fires in the unambiguous 1-found / 1-leftover case,
+    so extra serial adapters won't cause a mis-assignment.
     """
+    infos = list_joystick_ports(exclude=exclude)
+    id_by_device: dict = {}
     found: dict = {}
-    for info in list_joystick_ports(exclude=exclude):
+    for info in infos:
         jid = probe_port_id(info.device, baud=baud)
+        id_by_device[info.device] = jid
         if jid in wanted_ids and jid not in found:
             found[jid] = info.device
+
+    if fallback_single and len(wanted_ids) == 2:
+        missing = [i for i in wanted_ids if i not in found]
+        if len(missing) == 1:
+            claimed = set(found.values())
+            # Only consider real USB-serial adapters (known VID), never the
+            # built-in ttyS* ports, and skip anything already positively
+            # identified as the other role.
+            leftovers = [
+                info.device
+                for info in infos
+                if info.vid in KNOWN_VID_PID
+                and info.device not in claimed
+                and id_by_device.get(info.device) not in wanted_ids
+            ]
+            if len(leftovers) == 1:
+                found[missing[0]] = leftovers[0]
+                print(
+                    f"[auto-id fallback] {missing[0]} not firmware-identified; "
+                    f"assigning the only remaining joystick port {leftovers[0]!r} to it."
+                )
+            elif len(leftovers) > 1:
+                print(
+                    f"[auto-id fallback] {missing[0]} not firmware-identified and "
+                    f"{len(leftovers)} unclaimed joystick ports remain "
+                    f"({leftovers}); refusing to guess. Flash a firmware id or pin "
+                    f"--{missing[0].lower()}-port explicitly."
+                )
     return found
 
 
