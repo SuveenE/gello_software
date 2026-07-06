@@ -278,6 +278,19 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--exclude-port",
+        action="append",
+        default=None,
+        dest="exclude_ports",
+        help=(
+            "Serial device path(s) the discovery/--auto-id probe must never open "
+            "(repeatable; matched by realpath so by-id/by-path aliases work). Use "
+            "this to protect the GELLO arm FTDI adapters from being probed while "
+            "their leader servers are running (otherwise you get 'comm failed -3001'). "
+            "Also settable via JOYSTICK_EXCLUDE_PORTS (path- or comma-separated)."
+        ),
+    )
+    parser.add_argument(
         "--left-id",
         default=os.environ.get("JOYSTICK_LEFT_ID", "LEFT"),
         help="Firmware id of the LEFT stick for --auto-id (default: LEFT).",
@@ -330,14 +343,25 @@ def main() -> None:
     args.left_invert_x = args.left_invert_x or args.invert_x
     args.left_invert_y = args.left_invert_y or args.invert_y
 
+    exclude_ports = list(args.exclude_ports or [])
+    env_exclude = os.environ.get("JOYSTICK_EXCLUDE_PORTS", "")
+    for chunk in env_exclude.replace(os.pathsep, ",").split(","):
+        chunk = chunk.strip()
+        if chunk:
+            exclude_ports.append(chunk)
+    if exclude_ports:
+        print(f"Excluding serial ports from discovery/probe: {exclude_ports}")
+
     if args.list:
         print("Probing firmware ids (this resets each board briefly)...")
-        print(format_port_table(probe_ids=True))
+        print(format_port_table(probe_ids=True, exclude=exclude_ports))
         return
 
     if args.auto_id:
         print(f"Resolving ports by firmware id ({args.left_id!r}, {args.right_id!r})...")
-        found = resolve_ports_by_firmware_id([args.left_id, args.right_id], baud=args.baud)
+        found = resolve_ports_by_firmware_id(
+            [args.left_id, args.right_id], baud=args.baud, exclude=exclude_ports
+        )
         args.left_port = found.get(args.left_id, args.left_port)
         args.right_port = found.get(args.right_id, args.right_port)
         if not args.left_port:

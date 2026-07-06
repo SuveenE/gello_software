@@ -12,7 +12,7 @@ import os
 import threading
 import time
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import Iterable, List, Optional, Tuple
 
 import numpy as np
 import serial
@@ -155,16 +155,55 @@ def parse_line(line: str) -> Optional[Tuple[int, int, int]]:
     return x, y, sw
 
 
-def find_serial_ports() -> List[str]:
+def _excluded_realpaths(exclude: Optional[Iterable[str]]) -> set:
+    """Resolve exclusion entries to canonical realpaths for robust matching.
+
+    Entries may be given as ``/dev/ttyUSB*`` device nodes or as
+    ``/dev/serial/by-id`` / ``by-path`` symlinks; resolving each to its realpath
+    lets us match regardless of which alias the caller (or udev) used. This is
+    how we keep the joystick auto-id probe from ever opening the GELLO arm FTDI
+    adapters, which would otherwise disturb the Dynamixel read loop (-3001).
+    """
+    resolved: set = set()
+    if not exclude:
+        return resolved
+    for entry in exclude:
+        if not entry:
+            continue
+        resolved.add(entry)
+        try:
+            resolved.add(os.path.realpath(entry))
+        except OSError:
+            pass
+    return resolved
+
+
+def _is_excluded(device: str, excluded: set) -> bool:
+    if not excluded:
+        return False
+    if device in excluded:
+        return True
+    try:
+        return os.path.realpath(device) in excluded
+    except OSError:
+        return False
+
+
+def find_serial_ports(exclude: Optional[Iterable[str]] = None) -> List[str]:
+    excluded = _excluded_realpaths(exclude)
     preferred: List[str] = []
     others: List[str] = []
     for p in list_ports.comports():
+        if _is_excluded(p.device, excluded):
+            continue
         vid = getattr(p, "vid", None)
         if vid in KNOWN_VID_PID:
             preferred.append(p.device)
         else:
             others.append(p.device)
     for dev in sorted(glob.glob("/dev/ttyUSB*") + glob.glob("/dev/ttyACM*")):
+        if _is_excluded(dev, excluded):
+            continue
         if dev not in preferred and dev not in others:
             others.append(dev)
     return preferred + others
@@ -209,12 +248,12 @@ class PortInfo:
         return f"{self.device}{vid_pid}{serial}{by_id}{by_path}"
 
 
-def list_joystick_ports() -> List[PortInfo]:
+def list_joystick_ports(exclude: Optional[Iterable[str]] = None) -> List[PortInfo]:
     """Return rich, stable-identity info for candidate joystick serial ports."""
     by_id = _symlink_targets("/dev/serial/by-id")
     by_path = _symlink_targets("/dev/serial/by-path")
     infos: List[PortInfo] = []
-    for dev in find_serial_ports():
+    for dev in find_serial_ports(exclude=exclude):
         real = os.path.realpath(dev)
         meta = next(
             (p for p in list_ports.comports() if p.device == dev),
@@ -282,6 +321,7 @@ def probe_port_id(
 def resolve_ports_by_firmware_id(
     wanted_ids: List[str],
     baud: int = 115200,
+    exclude: Optional[Iterable[str]] = None,
 ) -> dict:
     """Map each wanted firmware ID to the serial device reporting it.
 
@@ -289,9 +329,14 @@ def resolve_ports_by_firmware_id(
     were found (missing ids are simply absent from the dict). Robust to
     identical USB serial numbers / unstable device names because identity comes
     from the firmware, not the OS device path.
+
+    ``exclude`` lists serial devices the probe must never open (matched by
+    realpath, so by-id/by-path aliases resolve too). Pass the GELLO arm ports
+    here so the probe's port reset / ``?`` writes don't collide with the running
+    Dynamixel leader servers and trigger COMM_RX_TIMEOUT (-3001).
     """
     found: dict = {}
-    for info in list_joystick_ports():
+    for info in list_joystick_ports(exclude=exclude):
         jid = probe_port_id(info.device, baud=baud)
         if jid in wanted_ids and jid not in found:
             found[jid] = info.device
@@ -299,10 +344,12 @@ def resolve_ports_by_firmware_id(
 
 
 def format_port_table(
-    infos: Optional[List[PortInfo]] = None, probe_ids: bool = False
+    infos: Optional[List[PortInfo]] = None,
+    probe_ids: bool = False,
+    exclude: Optional[Iterable[str]] = None,
 ) -> str:
     if infos is None:
-        infos = list_joystick_ports()
+        infos = list_joystick_ports(exclude=exclude)
     if not infos:
         return "No serial ports found."
     lines = [f"Found {len(infos)} serial port(s):"]
