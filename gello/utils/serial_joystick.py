@@ -47,6 +47,14 @@ class SerialJoystickConfig:
     center_x: int = ADC_CENTER
     center_y: int = ADC_CENTER
     half_span: int = ADC_HALF_SPAN
+    # On connect, sample the (assumed resting) stick for ``auto_center_secs`` and
+    # use the median as center_x/center_y. Fixes off-center pots that otherwise
+    # make one direction respond instantly and the opposite direction lag.
+    auto_center: bool = True
+    auto_center_secs: float = 1.0
+    # Refuse to trust an auto-center this far from ADC_CENTER (means the stick
+    # was almost certainly held/deflected during calibration): keep 512 instead.
+    auto_center_max_offset: int = 250
 
 
 def apply_axis_dominance(x: float, y: float, cone_ratio: float) -> tuple[float, float]:
@@ -447,10 +455,54 @@ class SerialJoystick:
         time.sleep(2.0)
         self._ser.reset_input_buffer()
 
+        if config.auto_center:
+            self._auto_center(config.auto_center_secs)
+
         self._latest: Optional[SerialJoystickSample] = None
         self._latest_lock = threading.Lock()
         self._reader_thread: Optional[threading.Thread] = None
         self._running = False
+
+    def _auto_center(self, duration: float) -> None:
+        """Measure the resting stick position and adopt it as the axis center.
+
+        Assumes the stick is untouched during the window. Uses the median (robust
+        to the occasional garbled line) and only trusts the result when it lands
+        within ``auto_center_max_offset`` of ``ADC_CENTER`` — a wildly off value
+        means the stick was held mid-deflection, so we keep the configured center.
+        """
+        cfg = self.config
+        xs: List[int] = []
+        ys: List[int] = []
+        deadline = time.time() + max(duration, 0.0)
+        while time.time() < deadline:
+            parsed = parse_line(self._ser.readline().decode(errors="replace"))
+            if parsed is None:
+                continue
+            x, y, _ = parsed
+            xs.append(x)
+            ys.append(y)
+        if len(xs) < 5:
+            print(
+                f"[auto-center {self.port}] too few samples ({len(xs)}); "
+                f"keeping center {cfg.center_x}/{cfg.center_y}."
+            )
+            return
+        cx = int(round(float(np.median(xs))))
+        cy = int(round(float(np.median(ys))))
+        if (
+            abs(cx - ADC_CENTER) > cfg.auto_center_max_offset
+            or abs(cy - ADC_CENTER) > cfg.auto_center_max_offset
+        ):
+            print(
+                f"[auto-center {self.port}] measured {cx}/{cy} is far from "
+                f"{ADC_CENTER} (stick held during calibration?); keeping "
+                f"{cfg.center_x}/{cfg.center_y}."
+            )
+            return
+        cfg.center_x, cfg.center_y = cx, cy
+        print(f"[auto-center {self.port}] center set to {cx}/{cy} (VRX/VRY at rest).")
+        self._ser.reset_input_buffer()
 
     def start_background(self) -> SerialJoystick:
         """Start a daemon thread that keeps ``get_latest()`` fresh.

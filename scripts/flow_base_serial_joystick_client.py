@@ -90,6 +90,8 @@ def _build_config(port, args, *, invert_x, invert_y, swap_xy) -> SerialJoystickC
         center_x=args.center_x,
         center_y=args.center_y,
         half_span=args.half_span,
+        auto_center=not args.no_auto_center,
+        auto_center_secs=args.auto_center_secs,
     )
 
 
@@ -335,6 +337,22 @@ def main() -> None:
     parser.add_argument("--center-x", type=int, default=512)
     parser.add_argument("--center-y", type=int, default=512)
     parser.add_argument("--half-span", type=int, default=512)
+    parser.add_argument(
+        "--no-auto-center",
+        action="store_true",
+        help=(
+            "Disable startup auto-centering. By default each stick's resting "
+            "position is sampled on connect and used as its axis center, so an "
+            "off-center pot doesn't make one direction respond before the other. "
+            "Keep hands off the sticks during startup."
+        ),
+    )
+    parser.add_argument(
+        "--auto-center-secs",
+        type=float,
+        default=1.0,
+        help="Seconds to sample the resting stick for auto-centering (default 1.0).",
+    )
     # Per-stick axis orientation.
     parser.add_argument("--left-no-swap-xy", action="store_true")
     parser.add_argument("--left-invert-x", action="store_true")
