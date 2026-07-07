@@ -29,7 +29,7 @@ DEFAULT_CROSS_AXIS_CONE_DEG = 25.0
 # Right-stick (rotation + linear rail) constants, mirroring the USB gamepad path
 # in i2rt.utils.gamepad_utils / flow_base_joystick_client.py.
 RAIL_DEADZONE = 0.15  # Larger deadzone so a resting stick never drives the rail.
-DEFAULT_RIGHT_STICK_CONE_DEG = 10.0
+DEFAULT_RIGHT_STICK_CONE_DEG = 25.0
 DEFAULT_LIFT_MAX_VEL_MS = 0.5  # Right-stick Y full deflection -> rail m/s.
 
 KNOWN_VID_PID = (0x2341, 0x2A03, 0x1A86, 0x0403, 0x10C4)
