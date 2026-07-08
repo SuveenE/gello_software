@@ -21,6 +21,13 @@ Two control modes
       left button      -> toggle local/global frame
       right button     -> reset odometry
 
+Axis orientation
+----------------
+The sticks are assumed to be mounted upside down, so both axes are inverted by
+default (a 180 deg in-plane rotation). If a stick is mounted the normal way,
+disable the flip with ``--no-invert-x --no-invert-y`` (single/left) or the
+per-stick ``--no-left-invert-x`` / ``--no-right-invert-y`` etc.
+
 Arduino sketch: scripts/arduino/joystick_test/joystick_test.ino
 
 Telling the two sticks apart
@@ -353,24 +360,46 @@ def main() -> None:
         default=1.0,
         help="Seconds to sample the resting stick for auto-centering (default 1.0).",
     )
-    # Per-stick axis orientation.
+    # Per-stick axis orientation. Invert defaults to ON: the sticks are mounted
+    # upside down, so both axes are negated (a 180 deg in-plane rotation).
+    # Pass --no-*-invert-x / --no-*-invert-y to restore the un-flipped mapping.
     parser.add_argument("--left-no-swap-xy", action="store_true")
-    parser.add_argument("--left-invert-x", action="store_true")
-    parser.add_argument("--left-invert-y", action="store_true")
+    parser.add_argument(
+        "--left-invert-x", action=argparse.BooleanOptionalAction, default=True,
+        help="Invert left-stick X (default: on for upside-down mount; --no-left-invert-x disables).",
+    )
+    parser.add_argument(
+        "--left-invert-y", action=argparse.BooleanOptionalAction, default=True,
+        help="Invert left-stick Y (default: on for upside-down mount; --no-left-invert-y disables).",
+    )
     parser.add_argument("--right-no-swap-xy", action="store_true")
-    parser.add_argument("--right-invert-x", action="store_true")
-    parser.add_argument("--right-invert-y", action="store_true")
+    parser.add_argument(
+        "--right-invert-x", action=argparse.BooleanOptionalAction, default=True,
+        help="Invert right-stick X (default: on for upside-down mount; --no-right-invert-x disables).",
+    )
+    parser.add_argument(
+        "--right-invert-y", action=argparse.BooleanOptionalAction, default=True,
+        help="Invert right-stick Y (default: on for upside-down mount; --no-right-invert-y disables).",
+    )
     # Back-compat single-stick aliases (apply to the left/only stick).
     parser.add_argument(
         "--no-swap-xy", action="store_true", help="Alias for --left-no-swap-xy."
     )
-    parser.add_argument("--invert-x", action="store_true", help="Alias for --left-invert-x.")
-    parser.add_argument("--invert-y", action="store_true", help="Alias for --left-invert-y.")
+    parser.add_argument(
+        "--invert-x", action=argparse.BooleanOptionalAction, default=None,
+        help="Alias for --left-invert-x / --no-left-invert-x.",
+    )
+    parser.add_argument(
+        "--invert-y", action=argparse.BooleanOptionalAction, default=None,
+        help="Alias for --left-invert-y / --no-left-invert-y.",
+    )
     args = parser.parse_args()
 
     args.left_no_swap_xy = args.left_no_swap_xy or args.no_swap_xy
-    args.left_invert_x = args.left_invert_x or args.invert_x
-    args.left_invert_y = args.left_invert_y or args.invert_y
+    if args.invert_x is not None:
+        args.left_invert_x = args.invert_x
+    if args.invert_y is not None:
+        args.left_invert_y = args.invert_y
 
     exclude_ports = list(args.exclude_ports or [])
     env_exclude = os.environ.get("JOYSTICK_EXCLUDE_PORTS", "")
