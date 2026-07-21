@@ -2,7 +2,7 @@ import os
 import subprocess
 import time
 from threading import Event, Lock, Thread
-from typing import Optional, Protocol, Sequence, Tuple
+from typing import Dict, Optional, Protocol, Sequence, Tuple
 
 import numpy as np
 from dynamixel_sdk.group_sync_read import GroupSyncRead
@@ -33,6 +33,17 @@ LEN_PRESENT_VELOCITY = 4
 ADDR_OPERATING_MODE = 11
 CURRENT_CONTROL_MODE = 0
 POSITION_CONTROL_MODE = 3
+# Current-based Position Control Mode: the servo holds a Goal Position while its
+# torque is capped by Goal Current, giving a soft, current-limited "spring" back
+# to that position. Ideal for a gentle return-to-start assist on a leader joint.
+CURRENT_BASED_POSITION_CONTROL_MODE = 5
+# Present Temperature (deg C), read for the thermal safety cutoff.
+ADDR_PRESENT_TEMPERATURE = 146
+# Bus Watchdog: fail-safe that stops the servo if no packet arrives within the
+# configured interval (unit below). Used so assisted motors relax if this process
+# or the USB link dies while torque is enabled.
+ADDR_BUS_WATCHDOG = 98
+BUS_WATCHDOG_UNIT_S = 0.02
 ADDR_MIN_POSITION_LIMIT = 48
 ADDR_MAX_POSITION_LIMIT = 52
 LEN_POSITION_LIMIT = 4
@@ -78,6 +89,34 @@ class DynamixelDriverProtocol(Protocol):
         """Verify that servos are in the expected operating mode."""
         ...
 
+    def set_operating_mode_for_ids(self, ids: Sequence[int], mode: int):
+        """Set the operating mode for a subset of servo IDs (others untouched)."""
+        ...
+
+    def verify_operating_mode_for_ids(self, ids: Sequence[int], expected_mode: int):
+        """Verify that a subset of servo IDs are in the expected operating mode."""
+        ...
+
+    def set_torque_mode_for_ids(self, ids: Sequence[int], enable: bool):
+        """Enable/disable torque for a subset of servo IDs (others untouched)."""
+        ...
+
+    def set_goal_currents_for_ids(self, currents: Dict[int, float]):
+        """Write Goal Current (mA) for specific servo IDs (id -> mA)."""
+        ...
+
+    def set_goal_positions_for_ids(self, positions: Dict[int, float]):
+        """Write Goal Position (rad) for specific servo IDs (id -> rad)."""
+        ...
+
+    def read_temperatures(self, ids: Sequence[int]) -> Dict[int, float]:
+        """Read Present Temperature (deg C) for specific servo IDs (id -> deg C)."""
+        ...
+
+    def set_bus_watchdog_for_ids(self, ids: Sequence[int], timeout_s: float):
+        """Set the bus watchdog fail-safe for specific servo IDs (0 disables)."""
+        ...
+
     def torque_enabled(self) -> bool:
         """Check if torque is enabled for the Dynamixel servos.
 
@@ -117,6 +156,15 @@ class FakeDynamixelDriver(DynamixelDriverProtocol):
         self._velocities = np.zeros(len(ids), dtype=float)
         self._currents = np.zeros(len(ids), dtype=float)
         self._torque_enabled = False
+        # Per-ID state exercised by the return-assist code path (tests rely on it).
+        self._operating_modes: Dict[int, int] = {
+            int(i): POSITION_CONTROL_MODE for i in ids
+        }
+        self._per_id_torque: Dict[int, bool] = {int(i): False for i in ids}
+        self._goal_currents: Dict[int, float] = {}
+        self._goal_positions: Dict[int, float] = {}
+        self._bus_watchdog: Dict[int, float] = {}
+        self._temperatures: Dict[int, float] = {int(i): 25.0 for i in ids}
 
     def set_joints(self, joint_angles: Sequence[float]):
         if len(joint_angles) != len(self._ids):
@@ -139,16 +187,49 @@ class FakeDynamixelDriver(DynamixelDriverProtocol):
         self.set_current(torques)
 
     def set_operating_mode(self, mode: int):
-        pass
+        for dxl_id in self._ids:
+            self._operating_modes[int(dxl_id)] = int(mode)
 
     def verify_operating_mode(self, expected_mode: int):
         pass
+
+    def set_operating_mode_for_ids(self, ids: Sequence[int], mode: int):
+        for dxl_id in ids:
+            self._operating_modes[int(dxl_id)] = int(mode)
+
+    def verify_operating_mode_for_ids(self, ids: Sequence[int], expected_mode: int):
+        for dxl_id in ids:
+            if self._operating_modes.get(int(dxl_id)) != int(expected_mode):
+                raise RuntimeError(
+                    f"Operating mode mismatch for Dynamixel ID {dxl_id}"
+                )
+
+    def set_torque_mode_for_ids(self, ids: Sequence[int], enable: bool):
+        for dxl_id in ids:
+            self._per_id_torque[int(dxl_id)] = bool(enable)
+
+    def set_goal_currents_for_ids(self, currents: Dict[int, float]):
+        for dxl_id, current_ma in currents.items():
+            self._goal_currents[int(dxl_id)] = float(current_ma)
+
+    def set_goal_positions_for_ids(self, positions: Dict[int, float]):
+        for dxl_id, angle_rad in positions.items():
+            self._goal_positions[int(dxl_id)] = float(angle_rad)
+
+    def read_temperatures(self, ids: Sequence[int]) -> Dict[int, float]:
+        return {int(dxl_id): float(self._temperatures[int(dxl_id)]) for dxl_id in ids}
+
+    def set_bus_watchdog_for_ids(self, ids: Sequence[int], timeout_s: float):
+        for dxl_id in ids:
+            self._bus_watchdog[int(dxl_id)] = float(timeout_s)
 
     def torque_enabled(self) -> bool:
         return self._torque_enabled
 
     def set_torque_mode(self, enable: bool):
         self._torque_enabled = enable
+        for dxl_id in self._ids:
+            self._per_id_torque[int(dxl_id)] = bool(enable)
 
     def get_joints(self) -> np.ndarray:
         return self._joint_angles.copy()
@@ -445,6 +526,118 @@ class DynamixelDriver(DynamixelDriverProtocol):
                 ):
                     raise RuntimeError(
                         f"Operating mode mismatch for Dynamixel ID {dxl_id} (got {mode}, expected {expected_mode})"
+                    )
+
+    def set_operating_mode_for_ids(self, ids: Sequence[int], mode: int):
+        if self._is_fake:
+            return
+        with self._lock:
+            for dxl_id in ids:
+                dxl_comm_result, dxl_error = self._packetHandler.write1ByteTxRx(
+                    self._portHandler, dxl_id, ADDR_OPERATING_MODE, int(mode)
+                )
+                if dxl_comm_result != COMM_SUCCESS or dxl_error != 0:
+                    raise RuntimeError(
+                        f"Failed to set operating mode for Dynamixel ID {dxl_id}"
+                    )
+
+    def verify_operating_mode_for_ids(self, ids: Sequence[int], expected_mode: int):
+        if self._is_fake:
+            return
+        with self._lock:
+            for dxl_id in ids:
+                mode, dxl_comm_result, dxl_error = self._packetHandler.read1ByteTxRx(
+                    self._portHandler, dxl_id, ADDR_OPERATING_MODE
+                )
+                if (
+                    dxl_comm_result != COMM_SUCCESS
+                    or dxl_error != 0
+                    or mode != int(expected_mode)
+                ):
+                    raise RuntimeError(
+                        f"Operating mode mismatch for Dynamixel ID {dxl_id} "
+                        f"(got {mode}, expected {expected_mode})"
+                    )
+
+    def set_torque_mode_for_ids(self, ids: Sequence[int], enable: bool):
+        if self._is_fake:
+            return
+        torque_value = TORQUE_ENABLE if enable else TORQUE_DISABLE
+        with self._lock:
+            for dxl_id in ids:
+                dxl_comm_result, dxl_error = self._packetHandler.write1ByteTxRx(
+                    self._portHandler, dxl_id, ADDR_TORQUE_ENABLE, torque_value
+                )
+                if dxl_comm_result != COMM_SUCCESS or dxl_error != 0:
+                    raise RuntimeError(
+                        f"Failed to set torque mode for Dynamixel ID {dxl_id}"
+                    )
+
+    def set_goal_currents_for_ids(self, currents: Dict[int, float]):
+        if self._is_fake:
+            return
+        with self._lock:
+            for dxl_id, current_ma in currents.items():
+                # Goal Current is a 2-byte signed value in ~1 mA units. Mask to 16
+                # bits so the SDK writes the correct two's-complement bytes.
+                current_value = int(round(current_ma)) & 0xFFFF
+                dxl_comm_result, dxl_error = self._packetHandler.write2ByteTxRx(
+                    self._portHandler, dxl_id, ADDR_GOAL_CURRENT, current_value
+                )
+                if dxl_comm_result != COMM_SUCCESS or dxl_error != 0:
+                    raise RuntimeError(
+                        f"Failed to set goal current for Dynamixel ID {dxl_id}"
+                    )
+
+    def set_goal_positions_for_ids(self, positions: Dict[int, float]):
+        if self._is_fake:
+            return
+        with self._lock:
+            for dxl_id, angle_rad in positions.items():
+                position_value = self._rad_to_ticks(angle_rad) & 0xFFFFFFFF
+                dxl_comm_result, dxl_error = self._packetHandler.write4ByteTxRx(
+                    self._portHandler, dxl_id, ADDR_GOAL_POSITION, position_value
+                )
+                if dxl_comm_result != COMM_SUCCESS or dxl_error != 0:
+                    raise RuntimeError(
+                        f"Failed to set goal position for Dynamixel ID {dxl_id}"
+                    )
+
+    def read_temperatures(self, ids: Sequence[int]) -> Dict[int, float]:
+        if self._is_fake:
+            return {int(dxl_id): 25.0 for dxl_id in ids}
+        temperatures: Dict[int, float] = {}
+        with self._lock:
+            for dxl_id in ids:
+                temp, dxl_comm_result, dxl_error = self._packetHandler.read1ByteTxRx(
+                    self._portHandler, dxl_id, ADDR_PRESENT_TEMPERATURE
+                )
+                if dxl_comm_result != COMM_SUCCESS or dxl_error != 0:
+                    raise RuntimeError(
+                        f"Failed to read temperature for Dynamixel ID {dxl_id}"
+                    )
+                temperatures[int(dxl_id)] = float(temp)
+        return temperatures
+
+    def set_bus_watchdog_for_ids(self, ids: Sequence[int], timeout_s: float):
+        # value 0 disables the watchdog (and clears a latched watchdog error);
+        # otherwise it is expressed in BUS_WATCHDOG_UNIT_S increments, clamped to
+        # the firmware's valid 1..127 range.
+        if self._is_fake:
+            return
+        if timeout_s <= 0:
+            value = 0
+        else:
+            value = int(round(timeout_s / BUS_WATCHDOG_UNIT_S))
+            value = max(1, min(127, value))
+        with self._lock:
+            for dxl_id in ids:
+                dxl_comm_result, dxl_error = self._packetHandler.write1ByteTxRx(
+                    self._portHandler, dxl_id, ADDR_BUS_WATCHDOG, value
+                )
+                if dxl_comm_result != COMM_SUCCESS or dxl_error != 0:
+                    raise RuntimeError(
+                        f"Failed to set bus watchdog for Dynamixel ID {dxl_id}"
                     )
 
     def _start_reading_thread(self):
