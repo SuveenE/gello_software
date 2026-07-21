@@ -153,10 +153,44 @@ class DynamixelRobot(Robot):
     def get_observations(self) -> Dict[str, np.ndarray]:
         return {"joint_state": self.get_joint_state()}
 
+    @staticmethod
+    def _normalize_assist_currents(assist_ids, current_ma) -> Dict[int, float]:
+        """Resolve current_ma (scalar | sequence | {id: mA}) to a {id: mA} map.
+
+        A sequence is matched positionally to ``assist_ids``; a scalar is applied
+        to every id. All resolved currents must be strictly positive.
+        """
+        if isinstance(current_ma, dict):
+            currents_by_id = {int(k): float(v) for k, v in current_ma.items()}
+            missing = [m for m in assist_ids if m not in currents_by_id]
+            if missing:
+                raise ValueError(
+                    f"current_ma mapping is missing entries for motor ids {missing}"
+                )
+            currents_by_id = {m: currents_by_id[m] for m in assist_ids}
+        elif isinstance(current_ma, (list, tuple, np.ndarray)):
+            if len(current_ma) != len(assist_ids):
+                raise ValueError(
+                    f"current_ma has {len(current_ma)} values but there are "
+                    f"{len(assist_ids)} assist ids {assist_ids}"
+                )
+            currents_by_id = {
+                int(m): float(c) for m, c in zip(assist_ids, current_ma)
+            }
+        else:
+            currents_by_id = {int(m): float(current_ma) for m in assist_ids}
+
+        for motor_id, current in currents_by_id.items():
+            if current <= 0:
+                raise ValueError(
+                    f"current_ma for motor id {motor_id} must be positive, got {current}"
+                )
+        return currents_by_id
+
     def enable_joint_return_assist(
         self,
         assist_ids: Sequence[int],
-        current_ma: float,
+        current_ma,
         max_temperature_c: float = 50.0,
         watchdog_timeout_s: float = 1.0,
     ) -> None:
@@ -169,6 +203,10 @@ class DynamixelRobot(Robot):
         pose when released (useful when a stretched joint is hard to bring back
         one-handed). All other motors are left untouched (passive/torque-off).
 
+        ``current_ma`` may be a single value applied to every assisted motor, a
+        sequence aligned positionally with ``assist_ids``, or a ``{motor_id: mA}``
+        mapping, so different joints can get different return strengths.
+
         Safety: a bus watchdog relaxes the motors if this process or the USB link
         dies while torque is on, and a background thread disables the assist if any
         assisted motor gets too hot.
@@ -180,8 +218,7 @@ class DynamixelRobot(Robot):
         assist_ids = [int(m) for m in assist_ids]
         if not assist_ids:
             return
-        if current_ma <= 0:
-            raise ValueError(f"current_ma must be positive, got {current_ma}")
+        currents_by_id = self._normalize_assist_currents(assist_ids, current_ma)
         if max_temperature_c <= 0:
             raise ValueError(
                 f"max_temperature_c must be positive, got {max_temperature_c}"
@@ -220,7 +257,7 @@ class DynamixelRobot(Robot):
             assist_ids, CURRENT_BASED_POSITION_CONTROL_MODE
         )
         # Cap the holding torque (Goal Current) before enabling torque.
-        self._driver.set_goal_currents_for_ids({m: current_ma for m in assist_ids})
+        self._driver.set_goal_currents_for_ids(currents_by_id)
         self._driver.set_torque_mode_for_ids(assist_ids, True)
         self._driver.set_goal_positions_for_ids(targets_rad)
         self._driver.set_bus_watchdog_for_ids(assist_ids, watchdog_timeout_s)
@@ -235,8 +272,11 @@ class DynamixelRobot(Robot):
             daemon=True,
         )
         self._assist_thread.start()
+        currents_str = ", ".join(
+            f"id{m}={currents_by_id[m]:.0f}mA" for m in assist_ids
+        )
         print(
-            f"[return-assist] enabled on motor ids {assist_ids} at {current_ma:.0f} mA "
+            f"[return-assist] enabled ({currents_str}) "
             f"(cutoff {max_temperature_c:.0f}C, watchdog {watchdog_timeout_s:.2f}s)"
         )
 

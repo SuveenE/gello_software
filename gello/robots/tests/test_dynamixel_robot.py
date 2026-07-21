@@ -57,6 +57,20 @@ def test_assist_target_conversion_respects_sign_and_offset():
     robot.disable_joint_return_assist()
 
 
+def test_assist_per_motor_currents_list_and_dict():
+    # Positional list: id 1 -> 50 mA, id 2 -> 200 mA.
+    robot = _make_robot()
+    robot.enable_joint_return_assist([1, 2], current_ma=[50.0, 200.0])
+    assert robot._driver._goal_currents == {1: 50.0, 2: 200.0}
+    robot.disable_joint_return_assist()
+
+    # Same via an explicit {id: mA} mapping.
+    robot2 = _make_robot()
+    robot2.enable_joint_return_assist([1, 2], current_ma={2: 200.0, 1: 50.0})
+    assert robot2._driver._goal_currents == {1: 50.0, 2: 200.0}
+    robot2.disable_joint_return_assist()
+
+
 def test_assist_rejects_unknown_and_invalid_args():
     robot = _make_robot()
     with pytest.raises(ValueError):
@@ -65,6 +79,15 @@ def test_assist_rejects_unknown_and_invalid_args():
         robot.enable_joint_return_assist([1], current_ma=0.0)
     with pytest.raises(ValueError):
         robot.enable_joint_return_assist([1], current_ma=100.0, max_temperature_c=0.0)
+    # Per-motor current length must match the number of assist ids.
+    with pytest.raises(ValueError):
+        robot.enable_joint_return_assist([1, 2], current_ma=[50.0])
+    # A negative per-motor current is rejected.
+    with pytest.raises(ValueError):
+        robot.enable_joint_return_assist([1, 2], current_ma=[50.0, -200.0])
+    # A mapping missing an assisted id is rejected.
+    with pytest.raises(ValueError):
+        robot.enable_joint_return_assist([1, 2], current_ma={1: 50.0})
 
 
 def test_assist_sets_bus_watchdog_and_clears_on_disable():
