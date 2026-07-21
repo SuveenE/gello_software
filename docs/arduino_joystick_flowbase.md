@@ -176,8 +176,12 @@ Pass both `--left-port` and `--right-port` to enable dual mode:
 | Right | Up / down | Linear rail m/s (up = raise) |
 | Right | Button | Reset odometry |
 
-The right stick uses the same 10° cardinal gate as the gamepad so rotation and
-rail don't cross-talk (`--right-stick-cone-deg`, `--lift-max-vel-ms`).
+The right stick uses asymmetric cardinal gates so rotation and rail don't
+cross-talk: the left/right yaw cones have a 58° half-angle and the top/bottom
+rail cones have a 30° half-angle, leaving a 2° diagonal dead band. Override
+them with `--right-stick-horizontal-cone-deg` and
+`--right-stick-vertical-cone-deg`; `--right-stick-cone-deg` remains a legacy
+symmetric override. Set rail scaling with `--lift-max-vel-ms`.
 
 Normalization uses fixed ADC center **512** and span **512** (no startup calibration wiggle).
 

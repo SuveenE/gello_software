@@ -73,7 +73,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from gello.utils.serial_joystick import (  # noqa: E402
     DEFAULT_LIFT_MAX_VEL_MS,
-    DEFAULT_RIGHT_STICK_CONE_DEG,
+    DEFAULT_RIGHT_STICK_HORIZONTAL_CONE_DEG,
+    DEFAULT_RIGHT_STICK_VERTICAL_CONE_DEG,
     SerialJoystick,
     SerialJoystickConfig,
     format_port_table,
@@ -150,7 +151,8 @@ def _run_single(args, client) -> None:
 
 
 def _run_dual(args, client) -> None:
-    right_cone_ratio = math.tan(math.radians(args.right_stick_cone_deg))
+    yaw_cone_ratio = math.tan(math.radians(args.right_stick_horizontal_cone_deg))
+    rail_cone_ratio = math.tan(math.radians(args.right_stick_vertical_cone_deg))
 
     left_cfg = _build_config(
         args.left_port, args, invert_x=args.left_invert_x,
@@ -185,7 +187,8 @@ def _run_dual(args, client) -> None:
             if rs is not None:
                 yaw, rail_mps = screen_to_yaw_rail(
                     rs.screen_lr, rs.screen_ud,
-                    cone_ratio=right_cone_ratio,
+                    yaw_cone_ratio=yaw_cone_ratio,
+                    rail_cone_ratio=rail_cone_ratio,
                     lift_max_vel_ms=args.lift_max_vel_ms,
                 )
 
@@ -329,10 +332,25 @@ def main() -> None:
         help="Left-stick cross-axis cone filter (same as USB gamepad path).",
     )
     parser.add_argument(
+        "--right-stick-horizontal-cone-deg",
+        type=float,
+        default=DEFAULT_RIGHT_STICK_HORIZONTAL_CONE_DEG,
+        help="Half-angle of the right stick's left/right yaw cones (default: 58 degrees).",
+    )
+    parser.add_argument(
+        "--right-stick-vertical-cone-deg",
+        type=float,
+        default=DEFAULT_RIGHT_STICK_VERTICAL_CONE_DEG,
+        help="Half-angle of the right stick's top/bottom rail cones (default: 30 degrees).",
+    )
+    parser.add_argument(
         "--right-stick-cone-deg",
         type=float,
-        default=DEFAULT_RIGHT_STICK_CONE_DEG,
-        help="Right-stick cardinal gate: rotation vs rail separation cone.",
+        default=None,
+        help=(
+            "Legacy symmetric override: set both right-stick cone half-angles "
+            "to this value."
+        ),
     )
     parser.add_argument(
         "--lift-max-vel-ms",
@@ -394,6 +412,10 @@ def main() -> None:
         help="Alias for --left-invert-y / --no-left-invert-y.",
     )
     args = parser.parse_args()
+
+    if args.right_stick_cone_deg is not None:
+        args.right_stick_horizontal_cone_deg = args.right_stick_cone_deg
+        args.right_stick_vertical_cone_deg = args.right_stick_cone_deg
 
     args.left_no_swap_xy = args.left_no_swap_xy or args.no_swap_xy
     if args.invert_x is not None:

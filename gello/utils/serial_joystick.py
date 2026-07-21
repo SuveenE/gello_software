@@ -26,10 +26,12 @@ ADC_HALF_SPAN = 512
 FLOWBASE_DEADZONE = 0.05
 DEFAULT_CROSS_AXIS_CONE_DEG = 25.0
 
-# Right-stick (rotation + linear rail) constants, mirroring the USB gamepad path
-# in i2rt.utils.gamepad_utils / flow_base_joystick_client.py.
+# Right-stick (rotation + linear rail) constants. Yaw gets a wider horizontal
+# cone than the rail's vertical cone; together they leave a 2 degree diagonal
+# dead band in each quadrant (58 + 30 = 88 degrees).
 RAIL_DEADZONE = 0.15  # Larger deadzone so a resting stick never drives the rail.
-DEFAULT_RIGHT_STICK_CONE_DEG = 25.0
+DEFAULT_RIGHT_STICK_HORIZONTAL_CONE_DEG = 58.0
+DEFAULT_RIGHT_STICK_VERTICAL_CONE_DEG = 30.0
 DEFAULT_LIFT_MAX_VEL_MS = 0.5  # Right-stick Y full deflection -> rail m/s.
 
 KNOWN_VID_PID = (0x2341, 0x2A03, 0x1A86, 0x0403, 0x10C4)
@@ -70,19 +72,26 @@ def apply_axis_dominance(x: float, y: float, cone_ratio: float) -> tuple[float, 
     return x, y
 
 
-def gate_to_cardinal(x: float, y: float, cone_ratio: float) -> Tuple[float, float]:
+def gate_to_cardinal(
+    x: float,
+    y: float,
+    x_cone_ratio: float,
+    y_cone_ratio: Optional[float] = None,
+) -> Tuple[float, float]:
     """Keep each axis only when the push is near its OWN cardinal direction.
 
     Same as ``i2rt.utils.gamepad_utils.gate_to_cardinal``: used for the right
     stick so rotation (X) and rail (Y) do not cross-talk. ``x`` survives only
-    when ``|y| <= cone_ratio * |x|`` and vice-versa; diagonal pushes move
-    neither. A non-positive ratio disables the filter.
+    when ``|y| <= x_cone_ratio * |x|`` and ``y`` survives only when
+    ``|x| <= y_cone_ratio * |y|``. If ``y_cone_ratio`` is omitted, the
+    symmetric legacy behavior is retained. A non-positive ratio disables the
+    filter for its corresponding axis.
     """
-    if cone_ratio <= 0.0:
-        return x, y
+    if y_cone_ratio is None:
+        y_cone_ratio = x_cone_ratio
     ax, ay = abs(x), abs(y)
-    x_out = x if ay <= cone_ratio * ax else 0.0
-    y_out = y if ax <= cone_ratio * ay else 0.0
+    x_out = x if x_cone_ratio <= 0.0 or ay <= x_cone_ratio * ax else 0.0
+    y_out = y if y_cone_ratio <= 0.0 or ax <= y_cone_ratio * ay else 0.0
     return x_out, y_out
 
 
@@ -130,7 +139,9 @@ def screen_to_yaw_rail(
     screen_lr: float,
     screen_ud: float,
     *,
-    cone_ratio: float,
+    cone_ratio: Optional[float] = None,
+    yaw_cone_ratio: Optional[float] = None,
+    rail_cone_ratio: Optional[float] = None,
     lift_max_vel_ms: float = DEFAULT_LIFT_MAX_VEL_MS,
     yaw_deadzone: float = FLOWBASE_DEADZONE,
     rail_deadzone: float = RAIL_DEADZONE,
@@ -139,10 +150,28 @@ def screen_to_yaw_rail(
 
     Left/right drives yaw (normalised ``[-1, 1]``, scaled by the controller's
     ``max_vel``); up/down drives the linear rail in physical m/s (up = positive).
-    Uses the same cardinal gating as the USB gamepad's right stick so rotation
-    and rail do not cross-talk.
+    Yaw and rail may use different cardinal half-angles. ``cone_ratio`` remains
+    as a backward-compatible symmetric setting when the axis-specific ratios
+    are omitted.
     """
-    yaw, rail = gate_to_cardinal(screen_lr, screen_ud, cone_ratio)
+    if yaw_cone_ratio is None:
+        yaw_cone_ratio = (
+            cone_ratio
+            if cone_ratio is not None
+            else math.tan(math.radians(DEFAULT_RIGHT_STICK_HORIZONTAL_CONE_DEG))
+        )
+    if rail_cone_ratio is None:
+        rail_cone_ratio = (
+            cone_ratio
+            if cone_ratio is not None
+            else math.tan(math.radians(DEFAULT_RIGHT_STICK_VERTICAL_CONE_DEG))
+        )
+    yaw, rail = gate_to_cardinal(
+        screen_lr,
+        screen_ud,
+        yaw_cone_ratio,
+        rail_cone_ratio,
+    )
     if abs(yaw) < yaw_deadzone:
         yaw = 0.0
     if abs(rail) < rail_deadzone:
