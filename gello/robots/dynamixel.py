@@ -207,6 +207,12 @@ class DynamixelRobot(Robot):
         # Torque must be off to change the operating mode; the driver comes up with
         # torque disabled, but assert it explicitly for these IDs to be safe.
         self._driver.set_torque_mode_for_ids(assist_ids, False)
+        # Clear any latched Bus Watchdog error from a previous run first. When the
+        # watchdog trips (e.g. this process was killed while torque was on), the
+        # servo's Goal Current/Position registers become read-only until Bus
+        # Watchdog(98) is reset to 0, which would make the Goal Current write below
+        # fail with a Data Range Error.
+        self._driver.set_bus_watchdog_for_ids(assist_ids, 0.0)
         self._driver.set_operating_mode_for_ids(
             assist_ids, CURRENT_BASED_POSITION_CONTROL_MODE
         )

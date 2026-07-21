@@ -528,6 +528,15 @@ class DynamixelDriver(DynamixelDriverProtocol):
                         f"Operating mode mismatch for Dynamixel ID {dxl_id} (got {mode}, expected {expected_mode})"
                     )
 
+    def _describe_comm(self, dxl_comm_result: int, dxl_error: int) -> str:
+        """Human-readable decode of an SDK comm result + packet error field."""
+        return (
+            f"comm_result={dxl_comm_result} "
+            f"({self._packetHandler.getTxRxResult(dxl_comm_result)}), "
+            f"packet_error={dxl_error} "
+            f"({self._packetHandler.getRxPacketError(dxl_error)})"
+        )
+
     def set_operating_mode_for_ids(self, ids: Sequence[int], mode: int):
         if self._is_fake:
             return
@@ -538,7 +547,8 @@ class DynamixelDriver(DynamixelDriverProtocol):
                 )
                 if dxl_comm_result != COMM_SUCCESS or dxl_error != 0:
                     raise RuntimeError(
-                        f"Failed to set operating mode for Dynamixel ID {dxl_id}"
+                        f"Failed to set operating mode for Dynamixel ID {dxl_id}: "
+                        f"{self._describe_comm(dxl_comm_result, dxl_error)}"
                     )
 
     def verify_operating_mode_for_ids(self, ids: Sequence[int], expected_mode: int):
@@ -556,7 +566,8 @@ class DynamixelDriver(DynamixelDriverProtocol):
                 ):
                     raise RuntimeError(
                         f"Operating mode mismatch for Dynamixel ID {dxl_id} "
-                        f"(got {mode}, expected {expected_mode})"
+                        f"(got {mode}, expected {expected_mode}): "
+                        f"{self._describe_comm(dxl_comm_result, dxl_error)}"
                     )
 
     def set_torque_mode_for_ids(self, ids: Sequence[int], enable: bool):
@@ -570,7 +581,8 @@ class DynamixelDriver(DynamixelDriverProtocol):
                 )
                 if dxl_comm_result != COMM_SUCCESS or dxl_error != 0:
                     raise RuntimeError(
-                        f"Failed to set torque mode for Dynamixel ID {dxl_id}"
+                        f"Failed to set torque mode for Dynamixel ID {dxl_id}: "
+                        f"{self._describe_comm(dxl_comm_result, dxl_error)}"
                     )
 
     def set_goal_currents_for_ids(self, currents: Dict[int, float]):
@@ -586,7 +598,8 @@ class DynamixelDriver(DynamixelDriverProtocol):
                 )
                 if dxl_comm_result != COMM_SUCCESS or dxl_error != 0:
                     raise RuntimeError(
-                        f"Failed to set goal current for Dynamixel ID {dxl_id}"
+                        f"Failed to set goal current for Dynamixel ID {dxl_id}: "
+                        f"{self._describe_comm(dxl_comm_result, dxl_error)}"
                     )
 
     def set_goal_positions_for_ids(self, positions: Dict[int, float]):
@@ -600,7 +613,8 @@ class DynamixelDriver(DynamixelDriverProtocol):
                 )
                 if dxl_comm_result != COMM_SUCCESS or dxl_error != 0:
                     raise RuntimeError(
-                        f"Failed to set goal position for Dynamixel ID {dxl_id}"
+                        f"Failed to set goal position for Dynamixel ID {dxl_id}: "
+                        f"{self._describe_comm(dxl_comm_result, dxl_error)}"
                     )
 
     def read_temperatures(self, ids: Sequence[int]) -> Dict[int, float]:
@@ -614,7 +628,8 @@ class DynamixelDriver(DynamixelDriverProtocol):
                 )
                 if dxl_comm_result != COMM_SUCCESS or dxl_error != 0:
                     raise RuntimeError(
-                        f"Failed to read temperature for Dynamixel ID {dxl_id}"
+                        f"Failed to read temperature for Dynamixel ID {dxl_id}: "
+                        f"{self._describe_comm(dxl_comm_result, dxl_error)}"
                     )
                 temperatures[int(dxl_id)] = float(temp)
         return temperatures
@@ -637,7 +652,8 @@ class DynamixelDriver(DynamixelDriverProtocol):
                 )
                 if dxl_comm_result != COMM_SUCCESS or dxl_error != 0:
                     raise RuntimeError(
-                        f"Failed to set bus watchdog for Dynamixel ID {dxl_id}"
+                        f"Failed to set bus watchdog for Dynamixel ID {dxl_id}: "
+                        f"{self._describe_comm(dxl_comm_result, dxl_error)}"
                     )
 
     def _start_reading_thread(self):
