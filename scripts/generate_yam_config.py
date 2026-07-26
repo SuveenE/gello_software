@@ -1,11 +1,12 @@
 """Automated YAM configuration generator for GELLO.
 
-This script guides the user through setting up their YAM arm in the known position
-and automatically generates a YAML configuration file with the detected joint offsets.
+This script guides the user through placing a GELLO in the known YAM position
+and generates matching hardware/simulation YAMLs named from its FTDI ID.
 """
 
 import glob
 import os
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,14 +20,30 @@ from gello.dynamixel.driver import DynamixelDriver
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+SIDE_SETTINGS = {
+    "left": {
+        "joint_signs": (1.0, -1.0, -1.0, -1.0, 1.0, 1.0),
+        "channel": "can_left",
+        "server_port": 6001,
+    },
+    "right": {
+        "joint_signs": (1.0, 1.0, 1.0, -1.0, 1.0, 1.0),
+        "channel": "can_right",
+        "server_port": 6002,
+    },
+}
+
 
 @dataclass
 class Args:
+    side: str
+    """YAM mapping for this GELLO: left or right."""
+
     output_path: Optional[str] = None
-    """Output path for the generated YAML config. If not provided, will use configs/yam_auto_generated.yaml"""
+    """Hardware YAML output override. Defaults to configs/devices/YAM_<ID>_hw.yaml."""
 
     sim_output_path: Optional[str] = None
-    """Output path for the simulation YAML config. If not provided, will use configs/yam_auto_generated_sim.yaml"""
+    """Simulation YAML output override. Defaults to configs/devices/YAM_<ID>_sim.yaml."""
 
     port: Optional[str] = None
     """The port that GELLO is connected to. If not provided, will auto-detect."""
@@ -34,16 +51,26 @@ class Args:
     start_joints: Tuple[float, ...] = (0, 0, 0, 0, 0, 0)
     """The joint angles that the GELLO should be placed in (in radians). Default is YAM known position."""
 
-    joint_signs: Tuple[float, ...] = (1, -1, -1, -1, 1, 1)
-    """The joint signs for YAM arm."""
+    joint_signs: Optional[Tuple[float, ...]] = None
+    """Optional joint-sign override. Defaults to the selected side's mapping."""
 
     gripper: bool = True
     """Whether or not the gripper is attached."""
 
-    channel: str = "can_left"
-    """CAN channel for YAM robot communication."""
+    channel: Optional[str] = None
+    """Optional CAN channel override. Defaults to can_left or can_right."""
 
     def __post_init__(self):
+        if self.side not in SIDE_SETTINGS:
+            raise ValueError(
+                f"side must be one of {tuple(SIDE_SETTINGS)}, got {self.side!r}"
+            )
+        settings = SIDE_SETTINGS[self.side]
+        if self.joint_signs is None:
+            self.joint_signs = settings["joint_signs"]
+        if self.channel is None:
+            self.channel = settings["channel"]
+
         assert len(self.joint_signs) == len(self.start_joints)
         for idx, j in enumerate(self.joint_signs):
             assert (
@@ -58,6 +85,10 @@ class Args:
     def num_joints(self) -> int:
         extra_joints = 1 if self.gripper else 0
         return self.num_robot_joints + extra_joints
+
+    @property
+    def server_port(self) -> int:
+        return int(SIDE_SETTINGS[self.side]["server_port"])
 
 
 def find_gello_port() -> Optional[str]:
@@ -84,15 +115,28 @@ def find_gello_port() -> Optional[str]:
                 print("Please enter a valid number.")
 
 
+def extract_ftdi_id(port: str) -> str:
+    """Extract the stable FTDI ID used in generated config filenames."""
+    match = re.search(r"_([A-Za-z0-9]+)-if\d+-port\d+$", Path(port).name)
+    if match is None:
+        raise ValueError(
+            "Could not read the FTDI ID from the selected port. "
+            "Use a /dev/serial/by-id/usb-FTDI_...-if00-port0 path."
+        )
+    return match.group(1)
+
+
 def get_joint_offsets(
     args: Args, port: str
 ) -> Tuple[list, Optional[Tuple[float, float]]]:
     """Get joint offsets using the same logic as gello_get_offset.py."""
+    joint_signs = args.joint_signs
+    assert joint_signs is not None
     joint_ids = list(range(1, args.num_joints + 1))
     driver = DynamixelDriver(joint_ids, port=port, baudrate=57600)
 
     def get_error(offset: float, index: int, joint_state: np.ndarray) -> float:
-        joint_sign_i = args.joint_signs[index]
+        joint_sign_i = joint_signs[index]
         joint_i = joint_sign_i * (joint_state[index] - offset)
         start_i = args.start_joints[index]
         return np.abs(joint_i - start_i)
@@ -135,6 +179,7 @@ def flow_style_representer(dumper, data):
 def update_config_with_offsets(
     template_config: dict,
     port: str,
+    joint_signs: Tuple[float, ...],
     joint_offsets: list,
     gripper_config: Optional[Tuple[float, float]],
 ) -> dict:
@@ -163,6 +208,7 @@ def update_config_with_offsets(
 
     # Update basic config
     config["agent"]["port"] = port
+    dynamixel_config["joint_signs"] = list(joint_signs)
 
     # Update offsets and convert to flow style
     dynamixel_config["joint_offsets"] = to_flow_list(
@@ -206,6 +252,13 @@ def main(args: Args) -> None:
     else:
         port = args.port
         print(f"Using specified port: {port}\n")
+
+    try:
+        device_id = extract_ftdi_id(port)
+    except ValueError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+    print(f"GELLO ID: {device_id} ({args.side})\n")
 
     # Step 2: Physical setup instructions
     print("SETUP INSTRUCTIONS:")
@@ -251,13 +304,29 @@ def main(args: Args) -> None:
         with open(sim_template_path, "r") as f:
             sim_template = yaml.safe_load(f)
 
+        joint_signs = args.joint_signs
+        channel = args.channel
+        assert joint_signs is not None
+        assert channel is not None
+
         # Update configs with detected offsets
         hardware_config = update_config_with_offsets(
-            hardware_template, port, joint_offsets, gripper_config
+            hardware_template,
+            port,
+            joint_signs,
+            joint_offsets,
+            gripper_config,
         )
         sim_config = update_config_with_offsets(
-            sim_template, port, joint_offsets, gripper_config
+            sim_template,
+            port,
+            joint_signs,
+            joint_offsets,
+            gripper_config,
         )
+        hardware_config["robot"]["channel"] = channel
+        hardware_config["hardware_server_port"] = args.server_port
+        sim_config["robot"]["port"] = args.server_port
 
     except FileNotFoundError as e:
         print(f"Error: Template config file not found: {e}")
@@ -267,13 +336,14 @@ def main(args: Args) -> None:
         sys.exit(1)
 
     # Step 5: Save updated configs
+    device_config_dir = config_dir / "devices"
     if args.output_path is None:
-        hardware_output_path = config_dir / "yam_auto_generated.yaml"
+        hardware_output_path = device_config_dir / f"YAM_{device_id}_hw.yaml"
     else:
         hardware_output_path = Path(args.output_path)
 
     if args.sim_output_path is None:
-        sim_output_path = config_dir / "yam_auto_generated_sim.yaml"
+        sim_output_path = device_config_dir / f"YAM_{device_id}_sim.yaml"
     else:
         sim_output_path = Path(args.sim_output_path)
 
