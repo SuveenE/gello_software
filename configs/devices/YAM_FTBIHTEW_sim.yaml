@@ -3,15 +3,15 @@ robot:
   xml_path: third_party/mujoco_menagerie/i2rt_yam/yam.xml
   gripper_xml_path: null
   host: 127.0.0.1
-  port: 6002
+  port: 6001
 agent:
   _target_: gello.agents.gello_agent.GelloAgent
-  port: /dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FTBIN4ZU-if00-port0
+  port: /dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FTBIHTEW-if00-port0
   dynamixel_config:
     _target_: gello.agents.gello_agent.DynamixelRobotConfig
     joint_ids: [1, 2, 3, 4, 5, 6]
-    joint_offsets: [3.14159, 3.14159, 3.14159, 3.14159, 3.14159, 6.28319]
-    joint_signs: [1.0, 1.0, 1.0, -1.0, 1.0, 1.0]
-    gripper_config: [7, 188.37109375, 149.326171875]
+    joint_offsets: [4.71239, 3.14159, 3.14159, 3.14159, 1.5708, 1.5708]
+    joint_signs: [1.0, -1.0, -1.0, -1.0, 1.0, 1.0]
+    gripper_config: [7, 173.2109375, 209.970703125]
   start_joints: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
 hz: 30
