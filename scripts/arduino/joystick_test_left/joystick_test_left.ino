@@ -1,5 +1,5 @@
 /*
- * joystick_test.ino — Arduino Nano joystick streamer for GELLO tooling.
+ * joystick_test_left.ino — Arduino Nano LEFT joystick streamer for GELLO tooling.
  *
  * Wiring (matches scripts/test_joystick.py):
  *   Joystick GND  -> Nano GND
@@ -12,29 +12,20 @@
  *   <x>,<y>,<sw>\n
  * where x,y are 0..1023 raw ADC counts and sw is 1 (released) or 0 (pressed).
  *
- * Board identity (for using two sticks): tag each board LEFT or RIGHT below
- * before flashing. On boot, and whenever the host sends a '?' byte, the board
- * replies with a banner line:
- *   # ID:<JOYSTICK_ID>
+ * Board identity: this sketch is tagged LEFT (translation: forward/strafe).
+ * On boot, and whenever the host sends a '?' byte, the board replies with:
+ *   # ID:LEFT
  * Banner lines start with '#' so the CSV parser ignores them. This lets you
  * tell two otherwise-identical clone boards apart (e.g. two FTDI chips sharing
  * the same USB serial) regardless of which /dev/ttyUSB* they enumerate as, and
  * lets the client auto-assign roles with `--auto-id`.
- *
- * Prefer the dedicated sketches instead of editing this file:
- *   joystick_test_left/  -> JOYSTICK_ID "LEFT"
- *   joystick_test_right/ -> JOYSTICK_ID "RIGHT"
  *
  * Upload with the Arduino IDE / arduino-cli, selecting the "Arduino Nano"
  * board (use the "ATmega328P (Old Bootloader)" processor variant if a normal
  * upload fails on a clone board).
  */
 
-// ===== TAG THIS BOARD: uncomment exactly ONE line before flashing =====
-#define JOYSTICK_ID "LEFT"     // left stick  -> translation (forward/strafe)
-// #define JOYSTICK_ID "RIGHT"  // right stick -> rotation (yaw) + linear rail
-// #define JOYSTICK_ID ""       // single-stick / testing: no id banner
-// ======================================================================
+#define JOYSTICK_ID "LEFT"  // left stick -> translation (forward/strafe)
 
 const int PIN_VRX = A0;
 const int PIN_VRY = A1;
