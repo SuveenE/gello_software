@@ -25,6 +25,13 @@ Or pin each role to a device path explicitly (robust to identical USB serials)::
 Env fallbacks: ``JOYSTICK_LEFT_PORT``, ``JOYSTICK_RIGHT_PORT``,
 ``JOYSTICK_LEFT_ID`` (default LEFT), ``JOYSTICK_RIGHT_ID`` (default RIGHT).
 
+Axis orientation
+----------------
+The sticks are assumed to be mounted upside down, so ``--reverse`` is ON by
+default and negates both axes on both sticks (a 180 deg in-plane rotation),
+matching flow_base_serial_joystick_client.py. Pass ``--no-reverse`` for a
+normal mount, or override a single axis with ``--no-left-invert-x`` etc.
+
 Move each stick to test. Ctrl+C to exit.
 
 WSL note: USB serial devices must be attached to WSL with `usbipd` on Windows,
@@ -159,6 +166,24 @@ class Args(argparse.Namespace):
     pass
 
 
+def describe_reverse(args: "Args") -> str:
+    """``on``/``off``, or the effective per-stick inverts when they diverge."""
+    inverts = (
+        args.left_invert_x, args.left_invert_y,
+        args.right_invert_x, args.right_invert_y,
+    )
+    if all(inverts):
+        return "on"
+    if not any(inverts):
+        return "off"
+    return "L{}{} R{}{}".format(
+        "x" if args.left_invert_x else "-",
+        "y" if args.left_invert_y else "-",
+        "x" if args.right_invert_x else "-",
+        "y" if args.right_invert_y else "-",
+    )
+
+
 def parse_args() -> Args:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -206,14 +231,39 @@ def parse_args() -> Args:
     parser.add_argument("--center-x", type=int, default=512)
     parser.add_argument("--center-y", type=int, default=512)
     parser.add_argument("--half-span", type=int, default=512)
-    # Per-stick axis orientation.
+    # Axis orientation. --reverse is the baseline: the sticks are mounted upside
+    # down, so both axes are negated (a 180 deg in-plane rotation). The per-stick
+    # flags default to following --reverse and can override it one axis at a time.
+    parser.add_argument(
+        "--reverse", action=argparse.BooleanOptionalAction, default=True,
+        help=(
+            "Invert both axes on both sticks (default: on for upside-down "
+            "mount; --no-reverse disables)."
+        ),
+    )
     parser.add_argument("--left-no-swap-xy", action="store_true")
-    parser.add_argument("--left-invert-x", action="store_true")
-    parser.add_argument("--left-invert-y", action="store_true")
+    parser.add_argument(
+        "--left-invert-x", action=argparse.BooleanOptionalAction, default=None,
+        help="Invert left-stick X (default: follows --reverse).",
+    )
+    parser.add_argument(
+        "--left-invert-y", action=argparse.BooleanOptionalAction, default=None,
+        help="Invert left-stick Y (default: follows --reverse).",
+    )
     parser.add_argument("--right-no-swap-xy", action="store_true")
-    parser.add_argument("--right-invert-x", action="store_true")
-    parser.add_argument("--right-invert-y", action="store_true")
-    return parser.parse_args(namespace=Args())
+    parser.add_argument(
+        "--right-invert-x", action=argparse.BooleanOptionalAction, default=None,
+        help="Invert right-stick X (default: follows --reverse).",
+    )
+    parser.add_argument(
+        "--right-invert-y", action=argparse.BooleanOptionalAction, default=None,
+        help="Invert right-stick Y (default: follows --reverse).",
+    )
+    args = parser.parse_args(namespace=Args())
+    for name in ("left_invert_x", "left_invert_y", "right_invert_x", "right_invert_y"):
+        if getattr(args, name) is None:
+            setattr(args, name, args.reverse)
+    return args
 
 
 def resolve_ports(args: Args) -> None:
@@ -326,8 +376,9 @@ def main() -> None:
             out.extend(join_columns(left_panel, right_panel))
             out.append("")
             out.append(
-                "  center X={} Y={} span {}   Ctrl+C to exit".format(
-                    args.center_x, args.center_y, args.half_span
+                "  center X={} Y={} span {}   reverse {}   Ctrl+C to exit".format(
+                    args.center_x, args.center_y, args.half_span,
+                    describe_reverse(args),
                 )
             )
 
