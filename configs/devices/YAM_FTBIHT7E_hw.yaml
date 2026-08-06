@@ -1,0 +1,16 @@
+robot:
+  _target_: gello.robots.yam.YAMRobot
+  channel: can_right
+agent:
+  _target_: gello.agents.gello_agent.GelloAgent
+  port: /dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FTBIHT7E-if00-port0
+  dynamixel_config:
+    _target_: gello.agents.gello_agent.DynamixelRobotConfig
+    joint_ids: [1, 2, 3, 4, 5, 6]
+    joint_offsets: [3.14159, 3.14159, 4.71239, 3.14159, 3.14159, 1.5708]
+    joint_signs: [1.0, -1.0, -1.0, -1.0, 1.0, 1.0]
+    gripper_config: [7, 270.3515625, 210.8515625]
+  start_joints: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+hz: 30
+max_steps: 1000
+hardware_server_port: 6002
