@@ -10,10 +10,11 @@ scripts/arduino/joystick_test/joystick_test.ino, which streams CSV
 Telling the two sticks apart
 ----------------------------
 Flash each Nano with ``#define JOYSTICK_ID "LEFT"`` / ``"RIGHT"`` (see the top of
-joystick_test.ino), then let the client assign roles by firmware id::
+joystick_test.ino). When ``--left-port`` / ``--right-port`` are not set, roles
+are assigned by firmware id automatically::
 
     cd ~/lerobot/gello_software
-    python3 scripts/test_dual_joystick.py --auto-id
+    python3 scripts/test_dual_joystick.py
 
 Or pin each role to a device path explicitly (robust to identical USB serials)::
 
@@ -200,10 +201,12 @@ def parse_args() -> Args:
     )
     parser.add_argument(
         "--auto-id",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=None,
         help=(
             "Assign left/right ports by querying each board's firmware "
-            "JOYSTICK_ID. Robust to identical USB serial numbers."
+            "JOYSTICK_ID. Default: on when --left-port/--right-port are not "
+            "both set (USB enumeration order is not reliable)."
         ),
     )
     parser.add_argument(
@@ -267,7 +270,14 @@ def parse_args() -> Args:
 
 
 def resolve_ports(args: Args) -> None:
-    if args.auto_id:
+    # USB enumeration order is not LEFT/RIGHT — prefer firmware ids whenever
+    # both ports are not pinned. Explicit --auto-id / --no-auto-id wins.
+    use_auto_id = (
+        args.auto_id
+        if args.auto_id is not None
+        else not (args.left_port and args.right_port)
+    )
+    if use_auto_id:
         print(
             f"Resolving ports by firmware id ({args.left_id!r}, {args.right_id!r})..."
         )
@@ -279,7 +289,7 @@ def resolve_ports(args: Args) -> None:
         print(f"  {args.left_id} -> {args.left_port}")
         print(f"  {args.right_id} -> {args.right_port}")
 
-    # If neither port was given/resolved, fall back to the first two candidates.
+    # Last resort only: first two candidates (order is not role-correct).
     if not args.left_port or not args.right_port:
         candidates = [
             c
@@ -290,12 +300,17 @@ def resolve_ports(args: Args) -> None:
             args.left_port = candidates.pop(0)
         if not args.right_port and candidates:
             args.right_port = candidates.pop(0)
+        print(
+            "Warning: assigned remaining stick(s) by USB order, not firmware id. "
+            "Prefer flashing JOYSTICK_ID LEFT/RIGHT or pass --left-port/--right-port.",
+            file=sys.stderr,
+        )
 
     if not args.left_port or not args.right_port:
         raise SystemExit(
-            "Could not resolve two joystick ports. Connect both boards and use "
-            "--auto-id, or pass --left-port and --right-port explicitly "
-            "(run --list to see options)."
+            "Could not resolve two joystick ports. Connect both boards "
+            "(firmware ids LEFT/RIGHT), or pass --left-port and --right-port "
+            "explicitly (run --list to see options)."
         )
 
 
